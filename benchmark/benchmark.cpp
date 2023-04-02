@@ -133,7 +133,7 @@ std::vector<float> doBench(Model& model, int loop, int warmup = 10, int forward 
     config.backendConfig = &backendConfig;
 
     std::vector<float> costs;
-    MNN::Session* session = net->createSession(config);
+    MNN::Session* session = net->createSession(config);  // 创建 session 时, 会先进行一次 shape 的计算
 
     MNN::Tensor* input    = net->getSessionInput(session, NULL);
 

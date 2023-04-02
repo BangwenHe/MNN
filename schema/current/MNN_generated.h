@@ -257,6 +257,7 @@ enum OpType {
   OpType_PoolInt8 = 516,
   OpType_FloatToInt8 = 517,
   OpType_EltwiseInt8 = 518,
+  OpType_GateRecurrent = 599,
   OpType_While = 600,
   OpType_If = 601,
   OpType_LayerNorm = 603,

@@ -108,6 +108,7 @@ extern void ___SpaceToBatchNDSizeComputer__OpType_SpaceToBatchND__();
 extern void ___PackComputer__OpType_Pack__();
 extern void ___DeconvolutionSizeComputer__OpType_Deconvolution__();
 extern void ___DeconvolutionSizeComputer__OpType_DeconvolutionDepthwise__();
+extern void ___GateRecurrentSizeComputer__OpType_GateRecurrent__();
 
 void registerShapeOps() {
 ___ShapeSizeComputer__OpType_Shape__();
@@ -218,5 +219,6 @@ ___SpaceToBatchNDSizeComputer__OpType_SpaceToBatchND__();
 ___PackComputer__OpType_Pack__();
 ___DeconvolutionSizeComputer__OpType_Deconvolution__();
 ___DeconvolutionSizeComputer__OpType_DeconvolutionDepthwise__();
+___GateRecurrentSizeComputer__OpType_GateRecurrent__();
 }
 }

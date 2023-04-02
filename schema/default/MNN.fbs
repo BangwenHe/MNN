@@ -47,6 +47,7 @@ enum OpType : int {
     Im2Col,
     Gather,
     GatherV2,
+    GateRecurrent,
     Im2Seq,
     InnerProduct,
     Input,

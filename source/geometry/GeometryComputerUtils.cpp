@@ -261,7 +261,7 @@ ErrorCode GeometryComputerUtils::shapeComputeAndGeometryTransform(
         if (_hasZeroShapeOutput(info)) {
             continue;
         }
-        auto geo = GeometryComputer::search(info.op->type(), compileType);
+        auto geo = GeometryComputer::search(info.op->type(), compileType);  // Runtime::onGetCompilerType() { return COMPILER_LOOP; }
         {
             bool res = false;
             if (!tempBuffer.hasWrap) {
