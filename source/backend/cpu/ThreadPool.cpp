@@ -21,6 +21,8 @@
 
 #define MNN_THREAD_POOL_MAX_TASKS 2
 namespace MNN {
+
+// 使用单例模式保存线程池
 ThreadPool* ThreadPool::gInstance = nullptr;
 static std::mutex gInitMutex;
 int ThreadPool::init(int number) {
@@ -47,6 +49,7 @@ void ThreadPool::destroy() {
 }
 #ifdef MNN_THREAD_LOCK_CPU
 static int getNumberOfCPU() {
+    // `/proc/cpuinfo` 中保存了每个 CPU 的信息, 所以能够用来查询有多少个 CPU
     FILE* fp = fopen("/proc/cpuinfo", "rb");
     if (!fp) {
         return 1;
@@ -70,6 +73,7 @@ static int getNumberOfCPU() {
 }
 
 static int getCPUMaxFreqKHz(int cpuID) {
+    // 查询三个文件中是否存在 CPU 最大频率的信息
     char path[256];
     sprintf(path, "/sys/devices/system/cpu/cpufreq/stats/cpu%d/time_in_state", cpuID);
     FILE* fp = fopen(path, "rb");
@@ -167,6 +171,8 @@ ThreadPool::ThreadPool(int numberThread) {
 #endif
     for (int i = 1; i < mNumberThread; ++i) {
         int threadIndex = i;
+
+        // 用 lambda 函数添加 worker
 #ifdef MNN_THREAD_LOCK_CPU
         mWorkers.emplace_back([this, sortedCPUIDs, threadIndex]() {
 #else
@@ -178,6 +184,7 @@ ThreadPool::ThreadPool(int numberThread) {
             while (!mStop) {
                 while (mActiveCount > 0) {
                     for (int i = 0; i < MNN_THREAD_POOL_MAX_TASKS; ++i) {
+                        // 遍历整个 mTasks 数组, 找到能够执行的任务并执行
                         if (*mTasks[i].second[threadIndex]) {
                             mTasks[i].first.first(threadIndex);
                             { *mTasks[i].second[threadIndex] = false; }

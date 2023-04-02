@@ -97,6 +97,9 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
     auto strideY  = mCommon->strideY();
     auto postParameters = getPostParameters();
     auto memoryPool = ((CPUBackend *)backend())->getBufferAllocator();
+
+    // barrier 栅栏, OpenCL 中的 barrier 会同步内存, 因此对于内存池 memoryPool 很有用
+    // `__a` 释放的时候会执行 deleter, 即后面的 lambda 函数, 因此可以保证内存一定是被同步了的
     memoryPool->barrierBegin();
     std::shared_ptr<void> __a(nullptr, [memoryPool](void *) { memoryPool->barrierEnd(); });
     int maxDepth = 5;
@@ -128,6 +131,8 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
             auto cPtr = outputPtr + core->pack * planeStart * bytes;
             auto biasPtr = mResource->mBias->host<uint8_t>();
             memoryPool->beginGroup();
+
+            // 这里返回了 code, 因此这里执行了矩阵乘, 代码中也显示使用了 `_generateMatMul`, 递归实现了 Strassen 算法
             auto code = unit.mStracssenComputor->onEncode(e, l, h, matrixSizeE * core->pack, UP_DIV(l, lPack) * lPack * hPack, matrixSizeE * core->pack, aPtr, bPtr, cPtr, true, biasPtr, postParameters);
             if (NO_ERROR != code) {
                 memoryPool->endGroup();

@@ -3,6 +3,7 @@
 #include "MNN/MNNDefine.h"
 #include "MNN/Tensor.hpp"
 #include "backend/cpu/CPUBackend.hpp"
+#include "core/Concurrency.h"
 #include <bits/stdint-uintn.h>
 #include <cstdio>
 
@@ -33,9 +34,9 @@ ErrorCode CPUGateRecurrent::onExecute(const std::vector<Tensor *> &inputs, const
     int channels = outputTensor->length(1);
     int height = outputTensor->length(2);
     int width = outputTensor->length(3);
+    int threadCount = static_cast<CPUBackend*>(backend())->threadNumber();
 
-    printf("%dx%dx%dx%d\n", batches, channels, height, width);
-
+    // 因为 w 依赖于 w-1 的结果, 所以如果把 w 提到最内层循环, 会导致结果错误
     // 使用循环的 naive 实现
     for (int w = 0; w < width; w++) {
         for (int b = 0; b < batches; b++) {
