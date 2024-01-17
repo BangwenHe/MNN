@@ -450,8 +450,8 @@ if (NOT APPLE)
 endif()
 
 if ((NOT MSVC) AND MNN_HIDDEN)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden -fvisibility=hidden")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
+    # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=default")
+    # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=default")
     # Omit frame pointer may cause difficult debug
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fomit-frame-pointer")
 endif()
