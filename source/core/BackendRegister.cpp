@@ -24,6 +24,12 @@ namespace OpenCL {
 extern void registerOpenCLRuntimeCreator();
 }
 #endif
+#if MNN_CODL_ENABLED
+#if !defined(MNN_OPENCL_ENABLED)
+#pragma error("CoDL backend need OpenCL")
+#endif
+extern void registerCoDLBackendCreator();
+#endif
 #if MNN_COREML_ENABLED
 extern void registerCoreMLRuntimeCreator();
 #endif
@@ -50,6 +56,9 @@ void registerBackend() {
 #endif
 #if MNN_OPENCL_ENABLED
         OpenCL::registerOpenCLRuntimeCreator();
+#endif
+#if MNN_CODL_ENABLED
+        registerCoDLBackendCreator();
 #endif
 #if MNN_METAL_ENABLED
         registerMetalRuntimeCreator();
