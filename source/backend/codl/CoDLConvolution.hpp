@@ -20,6 +20,8 @@ private:
     CoDLBackend *mBackend;
     std::shared_ptr<Execution> mCPUConvolution;
     std::shared_ptr<Execution> mOCLConvolution;
+    std::vector<Tensor *> mCPUInputs, mCPUOutputs;
+    std::vector<Tensor *> mOCLInputs, mOCLOutputs;
 };
 
 }

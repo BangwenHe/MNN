@@ -12,45 +12,35 @@ CoDLRaster::CoDLRaster(Backend *b, const Op *op, const std::vector<Tensor *> &in
 }
 
 ErrorCode CoDLRaster::onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) {
-    std::vector<Tensor*> cpuInputs, cpuOutputs;
-    std::vector<Tensor*> oclInputs, oclOutputs;
     for (auto input : inputs) {
       CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (input->buffer().device);
-      cpuInputs.push_back(mem->getCPUTensor());
-      oclInputs.push_back(mem->getOCLTensor());
+      mCPUInputs.push_back(mem->getCPUTensor());
+      mOCLInputs.push_back(mem->getOCLTensor());
     }
 
     for (auto output : outputs) {
       CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (output->buffer().device);
-      cpuOutputs.push_back(mem->getCPUTensor());
-      oclOutputs.push_back(mem->getOCLTensor());
+      mCPUOutputs.push_back(mem->getCPUTensor());
+      mOCLOutputs.push_back(mem->getOCLTensor());
     }
 
-    auto ret1 = mCPURaster->onResize(cpuInputs, cpuOutputs);
-    auto ret2 = mOCLRaster->onResize(oclInputs, oclOutputs);
+    auto ret1 = mCPURaster->onResize(mCPUInputs, mCPUOutputs);
+    auto ret2 = mOCLRaster->onResize(mOCLInputs, mOCLOutputs);
 
     return ret1 == NO_ERROR ? ret2 : ret1;
 }
 
 
 ErrorCode CoDLRaster::onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) {
-    std::vector<Tensor*> cpuInputs, cpuOutputs;
-    std::vector<Tensor*> oclInputs, oclOutputs;
-    for (auto input : inputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (input->buffer().device);
-      cpuInputs.push_back(mem->getCPUTensor());
-      oclInputs.push_back(mem->getOCLTensor());
-    }
+    ErrorCode ret1 = NO_ERROR, ret2 = NO_ERROR;
+    auto future2 = std::async(std::launch::async, [&]() {
+      ret2 = mOCLRaster->onExecute(mOCLInputs, mOCLOutputs);
+      mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+      return 0;
+    });
 
-    for (auto output : outputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (output->buffer().device);
-      cpuOutputs.push_back(mem->getCPUTensor());
-      oclOutputs.push_back(mem->getOCLTensor());
-    }
-
-    auto ret1 = mCPURaster->onExecute(cpuInputs, cpuOutputs);
-    auto ret2 = mOCLRaster->onExecute(oclInputs, oclOutputs);
-
+    ret1 = mCPURaster->onExecute(mCPUInputs, mCPUOutputs);
+    future2.get();
     return ret1 == NO_ERROR ? ret2 : ret1;
 }
 

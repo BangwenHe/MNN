@@ -21,6 +21,8 @@ private:
     CoDLBackend *mBackend;
     std::shared_ptr<Execution> mCPURaster;
     std::shared_ptr<Execution> mOCLRaster;
+    std::vector<Tensor *> mCPUInputs, mCPUOutputs;
+    std::vector<Tensor *> mOCLInputs, mOCLOutputs;
 };
 
 }
