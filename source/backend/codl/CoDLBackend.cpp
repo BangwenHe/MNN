@@ -106,8 +106,8 @@ struct CoDLBackendCreator : RuntimeCreator {
 
 CoDLBackend::CoDLBackend(const CoDLRuntime *runtime, const BackendConfig *config) : Backend(MNN_FORWARD_USER_2) {
   mCoDLRuntime = runtime;
-  mCPUBackend.reset((CPUBackend *) mCoDLRuntime->mCPURuntime->onCreate(config));
-  mOpenCLBackend.reset((OpenCL::OpenCLBackend *) mCoDLRuntime->mCLRuntime->onCreate(config)); 
+  mCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(config)));
+  mOpenCLBackend.reset((OpenCL::OpenCLBackend *) (mCoDLRuntime->mCLRuntime->onCreate(config))); 
 }
 
 CoDLBackend::~CoDLBackend() { }

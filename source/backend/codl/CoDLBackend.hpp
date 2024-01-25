@@ -67,12 +67,12 @@ public:
   virtual bool onUnmapTensor(Tensor::MapType mtype, Tensor::DimensionType dtype, const Tensor* dstTensor, void* mapPtr) override;
   virtual int onSync(Tensor::MapType mtype, bool toCpu, const Tensor* dstTensor) override;
 
-  std::shared_ptr<CPUBackend> getCPUBackend() const {
-    return mCPUBackend;
+  CPUBackend* getCPUBackend() const {
+    return mCPUBackend.get();
   }
 
-  std::shared_ptr<OpenCL::OpenCLBackend> getOpenCLBackend() const {
-    return mOpenCLBackend;
+  OpenCL::OpenCLBackend* getOpenCLBackend() const {
+    return mOpenCLBackend.get();
   }
 
   class Creator {

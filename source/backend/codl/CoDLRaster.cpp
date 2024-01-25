@@ -15,13 +15,13 @@ ErrorCode CoDLRaster::onResize(const std::vector<Tensor *> &inputs, const std::v
     std::vector<Tensor*> cpuInputs, cpuOutputs;
     std::vector<Tensor*> oclInputs, oclOutputs;
     for (auto input : inputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) input->buffer().device;
+      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (input->buffer().device);
       cpuInputs.push_back(mem->getCPUTensor());
       oclInputs.push_back(mem->getOCLTensor());
     }
 
     for (auto output : outputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) output->buffer().device;
+      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (output->buffer().device);
       cpuOutputs.push_back(mem->getCPUTensor());
       oclOutputs.push_back(mem->getOCLTensor());
     }
@@ -37,13 +37,13 @@ ErrorCode CoDLRaster::onExecute(const std::vector<Tensor *> &inputs, const std::
     std::vector<Tensor*> cpuInputs, cpuOutputs;
     std::vector<Tensor*> oclInputs, oclOutputs;
     for (auto input : inputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) input->buffer().device;
+      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (input->buffer().device);
       cpuInputs.push_back(mem->getCPUTensor());
       oclInputs.push_back(mem->getOCLTensor());
     }
 
     for (auto output : outputs) {
-      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) output->buffer().device;
+      CoDLCPUGPUMemPack *mem = (CoDLCPUGPUMemPack *) (output->buffer().device);
       cpuOutputs.push_back(mem->getCPUTensor());
       oclOutputs.push_back(mem->getOCLTensor());
     }

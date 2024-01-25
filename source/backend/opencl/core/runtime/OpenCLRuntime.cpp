@@ -636,7 +636,7 @@ std::pair<const void*, size_t> OpenCLRuntime::makeCache(void* tuneInfo) {
         pro->program = std::get<0>(iter.first);
         pro->buildInfo = std::get<1>(iter.first);
         
-        MNN_PRINT("%s - %s - %s\n", pro->program.c_str(), pro->kernel.c_str(), pro->buildInfo.c_str());
+        // MNN_PRINT("%s - %s - %s\n", pro->program.c_str(), pro->kernel.c_str(), pro->buildInfo.c_str());
         
         pro->buffer.resize(binSizes[0]);
         auto proRaw = program.get();
