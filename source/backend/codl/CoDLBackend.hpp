@@ -18,6 +18,20 @@
 
 namespace MNN {
 
+
+struct CoDLNodePartitionParam {
+
+  enum PartDim {
+    // 对于矩阵乘法类型的卷积，N表示N，IC表示M，OC表示K
+    PART_DIM_N = 0,
+    PART_DIM_IC = 1,
+    PART_DIM_OC = 2
+  };
+
+  PartDim mPartDim;
+  float mPartRatio;
+};
+
 class CoDLRuntime : public Runtime {
 public:
     friend class CoDLBackend;
