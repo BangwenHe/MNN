@@ -89,6 +89,10 @@ public:
     return mOpenCLBackend.get();
   }
 
+  CPUBackend* getBackupCPUBackend() const {
+    return mBackupCPUBackend.get();
+  }
+
   class Creator {
     public:
         /**
@@ -111,6 +115,7 @@ public:
 private:
   std::shared_ptr<CPUBackend> mCPUBackend;
   std::shared_ptr<OpenCL::OpenCLBackend> mOpenCLBackend;
+  std::shared_ptr<CPUBackend> mBackupCPUBackend;
   const CoDLRuntime *mCoDLRuntime;
 };
 

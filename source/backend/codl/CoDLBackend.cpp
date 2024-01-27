@@ -108,6 +108,13 @@ CoDLBackend::CoDLBackend(const CoDLRuntime *runtime, const BackendConfig *config
   mCoDLRuntime = runtime;
   mCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(config)));
   mOpenCLBackend.reset((OpenCL::OpenCLBackend *) (mCoDLRuntime->mCLRuntime->onCreate(config))); 
+
+  BackendConfig cpuConfig;
+  cpuConfig.flags = config->flags | 4;
+  cpuConfig.memory = config->memory;
+  cpuConfig.power = config->power;
+  cpuConfig.precision = config->precision;
+  mBackupCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(&cpuConfig)));
 }
 
 CoDLBackend::~CoDLBackend() { }
@@ -222,7 +229,8 @@ bool CoDLBackend::onUnmapTensor(Tensor::MapType mtype, Tensor::DimensionType dty
 
 int CoDLBackend::onSync(Tensor::MapType mtype, bool toCpu, const Tensor* dstTensor) {
   // MARK: onSync 在 CPUBackend 上无操作, 在 OpenCLBackend 上执行 CommandQueue::finish()
-  return mOpenCLBackend->onSync(mtype, toCpu, dstTensor);
+  // 在算子内部, 会调用 onSync, 以确保数据已经同步到 CPU 上, 这里不需要再次同步
+  return 0;
 }
 
 void registerCoDLBackendCreator() {

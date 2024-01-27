@@ -1,5 +1,6 @@
 #include "CoDLRaster.hpp"
 #include "CoDLCPUGPUMemPack.hpp"
+#include "MNN/AutoTime.hpp"
 
 namespace MNN {
 
@@ -33,15 +34,21 @@ ErrorCode CoDLRaster::onResize(const std::vector<Tensor *> &inputs, const std::v
 
 ErrorCode CoDLRaster::onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) {
     ErrorCode ret1 = NO_ERROR, ret2 = NO_ERROR;
-    auto future2 = std::async(std::launch::async, [&]() {
-      ret2 = mOCLRaster->onExecute(mOCLInputs, mOCLOutputs);
-      mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
-      return 0;
-    });
+    // auto future2 = std::async(std::launch::async, [&]() {
+    //   ret2 = mOCLRaster->onExecute(mOCLInputs, mOCLOutputs);
+    //   mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+    //   return 0;
+    // });
 
     ret1 = mCPURaster->onExecute(mCPUInputs, mCPUOutputs);
-    future2.get();
-    return ret1 == NO_ERROR ? ret2 : ret1;
+    // future2.get();
+
+    for (auto *output : outputs) {
+      auto *mem = (CoDLCPUGPUMemPack *) (output->buffer().device);
+      mem->getOCLTensor()->copyFromHostTensor(mem->getCPUTensor());
+    }
+
+    return ret1;
 }
 
 CoDLCreatorRegister<TypedCreator<CoDLRaster>> __raster_buffer_op(OpType_Raster, GpuMemObject::BUFFER);

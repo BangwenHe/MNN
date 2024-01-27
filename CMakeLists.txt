@@ -193,6 +193,7 @@ option(MNN_COREML "Enable CoreML" OFF)
 option(MNN_NNAPI "Enable NNAPI" OFF)
 
 option(MNN_CUDA_PROFILE "Enable CUDA profile" OFF)
+option(MNN_CODL_DEBUG "Enable CODL debug" OFF)
 
 if (NOT MNN_CUDA OR NOT CMAKE_SYSTEM_NAME MATCHES "^Linux")
   set(MNN_CUDA_PROFILE OFF)
@@ -243,6 +244,7 @@ message(STATUS "\tThreadPool: ${MNN_USE_THREAD_POOL}")
 message(STATUS "\tHidden: ${MNN_HIDDEN}")
 message(STATUS "\tBuild Path: ${CMAKE_CURRENT_BINARY_DIR}")
 message(STATUS "\tCUDA PROFILE: ${MNN_CUDA_PROFILE}")
+message(STATUS "\tCODL DEBUG: ${MNN_CODL_DEBUG}")
 
 if(CMAKE_SYSTEM_NAME MATCHES "^Android" OR CMAKE_SYSTEM_NAME MATCHES "^Linux")
     add_definitions(-fPIC)
@@ -535,6 +537,10 @@ IF(MNN_CODL)
     list(APPEND MNN_TARGETS MNN_CoDL)
     list(APPEND MNN_OBJECTS_TO_LINK $<TARGET_OBJECTS:MNN_CoDL>)
     list(APPEND MNN_EXTRA_DEPENDS ${MNN_CODL_LIBS})
+  ENDIF()
+
+  IF(MNN_CODL_DEBUG)
+    add_definitions(-DMNN_CODL_DEBUG=1)
   ENDIF()
 ENDIF()
 
