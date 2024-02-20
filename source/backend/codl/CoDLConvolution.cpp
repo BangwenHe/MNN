@@ -91,4 +91,7 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
 CoDLCreatorRegister<TypedCreator<CoDLConvolution>>
     __convolution_buffer_op(OpType_Convolution, GpuMemObject::BUFFER);
 
+CoDLCreatorRegister<TypedCreator<CoDLConvolution>> 
+    __convolution_image_op(OpType_Convolution, GpuMemObject::IMAGE);
+
 } // namespace MNN

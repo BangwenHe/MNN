@@ -52,5 +52,6 @@ ErrorCode CoDLRaster::onExecute(const std::vector<Tensor *> &inputs, const std::
 }
 
 CoDLCreatorRegister<TypedCreator<CoDLRaster>> __raster_buffer_op(OpType_Raster, GpuMemObject::BUFFER);
+CoDLCreatorRegister<TypedCreator<CoDLRaster>> __raster_image_op(OpType_Raster, GpuMemObject::IMAGE);
 
 }

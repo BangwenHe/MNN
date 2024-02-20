@@ -109,6 +109,11 @@ CoDLBackend::CoDLBackend(const CoDLRuntime *runtime, const BackendConfig *config
   mCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(config)));
   mOpenCLBackend.reset((OpenCL::OpenCLBackend *) (mCoDLRuntime->mCLRuntime->onCreate(config))); 
 
+#ifdef CODL_DEBUG
+  auto size = mOpenCLBackend->getOpenCLRuntime()->getMaxImage2DSize();
+  MNN_PRINT("max image size: %ldx%ld\n", size[0], size[1]);
+#endif
+
   BackendConfig cpuConfig;
   cpuConfig.flags = config->flags | 4;
   cpuConfig.memory = config->memory;
@@ -207,7 +212,7 @@ void CoDLBackend::addCreator(OpType type, GpuMemObject obj, Creator* creator) {
 
 Execution* CoDLBackend::onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs, const MNN::Op* op) {
   auto *map = GetCreator();
-  auto key = std::make_pair(op->type(), mOpenCLBackend->getOpenCLRuntime()->getGpuMemType());
+  auto key = std::make_pair(op->type(), mOpenCLBackend->getGpuMemType());
   auto iter = map->find(key);
   if (iter == map->end()) {
     // TODO: 如果是计算密集型 OP，如 conv mm 等，并行执行；如果是内存密集型 OP，如 Raster 等，CPU 执行

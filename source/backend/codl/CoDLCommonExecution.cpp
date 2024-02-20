@@ -55,4 +55,9 @@ CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __layernorm_buffer
 CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __binaryop_buffer_op(OpType_BinaryOp, GpuMemObject::BUFFER);
 CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __unaryop_buffer_op(OpType_UnaryOp, GpuMemObject::BUFFER);
 
+CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __while_image_op(OpType_While, GpuMemObject::IMAGE);
+CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __softmax_image_op(OpType_Softmax, GpuMemObject::IMAGE);
+CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __layernorm_image_op(OpType_LayerNorm, GpuMemObject::IMAGE);
+CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __binaryop_image_op(OpType_BinaryOp, GpuMemObject::IMAGE);
+CoDLCreatorRegister<TypedCreator<CoDLCPUOnlyCommonExecution>> __unaryop_image_op(OpType_UnaryOp, GpuMemObject::IMAGE);
 }

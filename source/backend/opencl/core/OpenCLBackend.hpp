@@ -160,6 +160,10 @@ public:
     virtual void* onMapTensor(Tensor::MapType mtype, Tensor::DimensionType dtype, const Tensor* srcTensor) override;
     virtual bool onUnmapTensor(Tensor::MapType mtype, Tensor::DimensionType dtype, const Tensor* dstTensor, void* mapPtr) override;
 
+    GpuMemObject getGpuMemType() const {
+        return mMemType;
+    }
+
 private:
     void copyFromDevice(const Tensor* srcTensor, const Tensor* dstTensor) const;
     void copyToDevice(const Tensor* srcTensor, const Tensor* dstTensor) const;
@@ -193,6 +197,7 @@ private:
     bool mUseSvm = false;
     void* allocMapTensorMemory(int length, bool svmFlag = false, cl_device_svm_capabilities svm_cap_ = 0);
 
+    GpuMemObject mMemType;
 };
 
 template <class T>

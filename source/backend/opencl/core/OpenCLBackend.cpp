@@ -274,6 +274,7 @@ OpenCLBackend::OpenCLBackend(std::shared_ptr<ImagePool>imgPool, std::shared_ptr<
     mUseRecordQueue = mOpenCLRuntime->isSupportRecordQueue();
     mDevideOpRecord = mOpenCLRuntime->isDevideOpRecord();
     mUseRecordableQueueSize = mOpenCLRuntime->getUseRecordableQueueSize();
+    mMemType = mOpenCLRuntime->getGpuMemType();
 }
 
 OpenCLBackend::~OpenCLBackend() {
