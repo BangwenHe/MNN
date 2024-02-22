@@ -29,9 +29,11 @@ ErrorCode CoDLConvolution::onResize(const std::vector<Tensor *> &inputs,
   mOCLInputs.clear();
   mOCLOutputs.clear();
 
-  float splitRatio = 0.8;
-  CoDLNodePartitionParam param = {CoDLNodePartitionParam::PART_DIM_OC,
-                                  splitRatio};
+  int n = inputs[0]->batch();
+  int m = inputs[0]->channel();
+  int k = outputs[0]->channel();
+  auto param = mBackend->getPartitionParam(n, m, k);
+  // CoDLNodePartitionParam param{CoDLNodePartitionParam::PART_DIM_IC, 0.6};
   int numTensor = inputs.size();
 
   for (int i = 0; i < numTensor; i++) {
@@ -79,11 +81,17 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
   auto future2 = std::async(std::launch::async, [&]() {
     ret2 = mOCLConvolution->onExecute(mOCLInputs, mOCLOutputs);
     // 因为 OpenCL 的执行是异步的, 所以这里需要等待 OpenCL 执行完毕
-    mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+    // {
+      // AutoTime _t{__LINE__, __func__};
+      mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+    // }
     return 0;
   });
 
-  ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
+  // {
+    // AutoTime _t{__LINE__, __func__};
+    ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
+  // }
   future2.get();
   return ret1 == NO_ERROR ? ret2 : ret1;
 }

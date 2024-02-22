@@ -11,10 +11,53 @@
 #include "core/TensorUtils.hpp"
 #include "core/RuntimeFactory.hpp"
 #include <memory>
+#include <fstream>
+#include "rapidjson/document.h"
+
+
+#define STRATEGY_CONFIG_FILE "config.json"
 
 namespace MNN {
 
+CoDLPartitionStrategy::CoDLPartitionStrategy(const std::string &jsonFile) {
+  mJsonFile = jsonFile;
 
+  // read `jsonfile` into string by stdc++
+  std::ifstream ifs(jsonFile);
+  std::string content((std::istreambuf_iterator<char>(ifs)),
+                      (std::istreambuf_iterator<char>()));
+
+  // parse json string
+  rapidjson::Document doc;
+  doc.Parse(content.c_str());
+
+  // parse json object
+  auto arr = doc.GetArray();
+  for (int i = 0; i < arr.Size(); i++) {
+    auto obj = arr[i].GetObject();
+    int n = obj["n"].GetInt();
+    int m = obj["m"].GetInt();
+    int k = obj["k"].GetInt();
+    float ratio = obj["ratio"].GetInt() * 0.1f;
+    auto dim = static_cast<CoDLNodePartitionParam::PartDim>(obj["dim"].GetInt());
+
+    CoDLNodePartitionParam param = {dim, ratio};
+    mPartitionMap[std::make_tuple(n, m, k)] = param;
+
+    MNN_PRINT("n: %d, m: %d, k: %d, dim: %d, ratio: %f\n", n, m, k, dim, ratio);
+  }
+}
+
+CoDLNodePartitionParam CoDLPartitionStrategy::getPartitionParam(int n, int m, int k) {
+  MNN_PRINT("getPartitionParam: n: %d, m: %d, k: %d\n", n, m, k);
+
+  auto iter = mPartitionMap.find(std::make_tuple(n, m, k));
+  if (iter != mPartitionMap.end()) {
+    return iter->second;
+  } else {
+    return {CoDLNodePartitionParam::PART_DIM_IC, 0.6};
+  }
+}
 
 CoDLRuntime::CoDLRuntime(const Backend::Info& info) { 
   Backend::Info cpuInfo;
@@ -120,6 +163,8 @@ CoDLBackend::CoDLBackend(const CoDLRuntime *runtime, const BackendConfig *config
   cpuConfig.power = config->power;
   cpuConfig.precision = config->precision;
   mBackupCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(&cpuConfig)));
+
+  mPartitionStrategy.reset(new CoDLPartitionStrategy{STRATEGY_CONFIG_FILE});
 }
 
 CoDLBackend::~CoDLBackend() { }

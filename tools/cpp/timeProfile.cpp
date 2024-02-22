@@ -145,6 +145,14 @@ int main(int argc, const char* argv[]) {
     };
 
     AUTOTIME;
+    // warmup
+    for (int i = 0; i < 3; ++i) {
+        inputTensor->copyFromHostTensor(inputTensorUser.get());
+        net->runSession(session);
+        outputTensor->copyToHostTensor(outputTensorUser.get());
+    }
+
+    MNN_PRINT("\nWarm up end\n");
     // just run
     for (int i = 0; i < runTime; ++i) {
         inputTensor->copyFromHostTensor(inputTensorUser.get());

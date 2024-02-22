@@ -32,6 +32,19 @@ struct CoDLNodePartitionParam {
   float mPartRatio;
 };
 
+class CoDLPartitionStrategy {
+public:
+  CoDLPartitionStrategy(const std::string &jsonFile);
+
+  CoDLNodePartitionParam getPartitionParam(int n, int m, int k);
+
+private:
+  std::string mJsonFile;
+
+  std::map<std::tuple<int, int, int>, CoDLNodePartitionParam> mPartitionMap;
+};
+
+
 class CoDLRuntime : public Runtime {
 public:
     friend class CoDLBackend;
@@ -93,6 +106,10 @@ public:
     return mBackupCPUBackend.get();
   }
 
+  CoDLNodePartitionParam getPartitionParam(int n, int m, int k) {
+    return mPartitionStrategy->getPartitionParam(n, m, k);
+  }
+
   class Creator {
     public:
         /**
@@ -117,6 +134,7 @@ private:
   std::shared_ptr<OpenCL::OpenCLBackend> mOpenCLBackend;
   std::shared_ptr<CPUBackend> mBackupCPUBackend;
   const CoDLRuntime *mCoDLRuntime;
+  std::shared_ptr<CoDLPartitionStrategy> mPartitionStrategy;
 };
 
 template <class T>

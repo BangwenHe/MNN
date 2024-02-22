@@ -462,12 +462,15 @@ static int test_main(int argc, const char* argv[]) {
                     auto ptr = inputTensor->map(MNN::Tensor::MAP_TENSOR_WRITE, inputTensor->getDimensionType());
                     inputTensor->unmap(MNN::Tensor::MAP_TENSOR_WRITE, inputTensor->getDimensionType(), ptr);
                 }
-                net->runSessionWithCallBackInfo(session, beforeCallBack, afterCallBack, false);
+                // net->runSessionWithCallBackInfo(session, beforeCallBack, afterCallBack, false);
+                net->runSession(session);
                 {
                     auto ptr = outputTensor->map(MNN::Tensor::MAP_TENSOR_READ, outputTensor->getDimensionType());
                     outputTensor->unmap(MNN::Tensor::MAP_TENSOR_READ, outputTensor->getDimensionType(), ptr);
                 }
             }
+
+            MNN_PRINT("\nwarmup finished!!!\n");
 
             std::vector<float> times(t, 0.0f);
             for (int i = 0; i < t; ++i) {
@@ -483,6 +486,16 @@ static int test_main(int argc, const char* argv[]) {
                 }
                 auto end = getTimeInUs();
                 times[i] = (end - begin) / 1000.0f;
+            }
+
+            for (int i = 0; i < t; i++) {
+                MNN_PRINT("%f ", times[i]);
+                if (i % 10 == 9) {
+                    MNN_PRINT("\n");
+                }
+            }
+            if (t < 10) {
+                MNN_PRINT("\n");
             }
 
             auto minTime = std::min_element(times.begin(), times.end());
