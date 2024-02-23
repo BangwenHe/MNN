@@ -38,7 +38,7 @@ CoDLPartitionStrategy::CoDLPartitionStrategy(const std::string &jsonFile) {
     int n = obj["n"].GetInt();
     int m = obj["m"].GetInt();
     int k = obj["k"].GetInt();
-    float ratio = obj["ratio"].GetInt() * 0.1f;
+    float ratio = obj["ratio"].GetFloat() * 0.1f;
     auto dim = static_cast<CoDLNodePartitionParam::PartDim>(obj["dim"].GetInt());
 
     CoDLNodePartitionParam param = {dim, ratio};

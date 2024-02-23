@@ -81,18 +81,12 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
   auto future2 = std::async(std::launch::async, [&]() {
     ret2 = mOCLConvolution->onExecute(mOCLInputs, mOCLOutputs);
     // 因为 OpenCL 的执行是异步的, 所以这里需要等待 OpenCL 执行完毕
-    // {
-      // AutoTime _t{__LINE__, __func__};
-      mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
-    // }
+    mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
     return 0;
   });
 
-  // {
-    // AutoTime _t{__LINE__, __func__};
-    ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
-  // }
-  future2.get();
+  ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
+  future2.wait();
   return ret1 == NO_ERROR ? ret2 : ret1;
 }
 
