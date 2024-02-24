@@ -49,7 +49,7 @@ ErrorCode CoDLConvolution::onResize(const std::vector<Tensor *> &inputs,
     CoDLCPUGPUMemPack::resizeMempack(input, partCPUInputShape, partOCLInputShape);
     CoDLCPUGPUMemPack::resizeMempack(output, partCPUOutputShape, partOCLOutputShape);
 
-#ifdef CODL_DEBUG
+#ifdef MNN_CODL_DEBUG
     MNN_PRINT("tensor %d: \n", i);
     MNN_PRINT("input:  ");
     CoDLUtils::printCoDLTensorShape(input);
@@ -77,16 +77,35 @@ ErrorCode CoDLConvolution::onResize(const std::vector<Tensor *> &inputs,
 
 ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
                                      const std::vector<Tensor *> &outputs) {
+#ifdef MNN_CODL_DEBUG
+  MNN_PRINT("\n");
+  AutoTime _t(__LINE__, __func__);
+#endif
   ErrorCode ret1 = NO_ERROR, ret2 = NO_ERROR;
   auto future2 = std::async(std::launch::async, [&]() {
+#ifdef MNN_CODL_DEBUG
+    AutoTime _t(__LINE__, __func__);
+#endif
     ret2 = mOCLConvolution->onExecute(mOCLInputs, mOCLOutputs);
     // 因为 OpenCL 的执行是异步的, 所以这里需要等待 OpenCL 执行完毕
     mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
     return 0;
   });
 
-  ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
-  future2.wait();
+#ifdef MNN_CODL_DEBUG
+  {
+    AutoTime _t(__LINE__, __func__);
+#endif
+    ret1 = mCPUConvolution->onExecute(mCPUInputs, mCPUOutputs);
+#ifdef MNN_CODL_DEBUG
+  }
+  {
+    AutoTime _t(__LINE__, __func__);
+#endif
+    future2.wait();
+#ifdef MNN_CODL_DEBUG
+  }
+#endif
   return ret1 == NO_ERROR ? ret2 : ret1;
 }
 

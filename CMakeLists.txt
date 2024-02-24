@@ -529,8 +529,9 @@ ENDIF()
 
 # CoDL
 IF(MNN_CODL)
-  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/source/backend/codl/)
   add_definitions(-DMNN_CODL_ENABLED=1)
+
+  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/source/backend/codl/)
   IF(MNN_SEP_BUILD)
     list(APPEND MNN_DEPS MNN_CoDL)
   ELSE()
@@ -540,7 +541,7 @@ IF(MNN_CODL)
   ENDIF()
 
   IF(MNN_CODL_DEBUG)
-    add_definitions(-DMNN_CODL_DEBUG=1)
+    target_compile_definitions(MNN_CoDL PUBLIC "-DMNN_CODL_DEBUG")
   ENDIF()
 ENDIF()
 

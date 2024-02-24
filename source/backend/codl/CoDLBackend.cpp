@@ -152,7 +152,7 @@ CoDLBackend::CoDLBackend(const CoDLRuntime *runtime, const BackendConfig *config
   mCPUBackend.reset((CPUBackend *) (mCoDLRuntime->mCPURuntime->onCreate(config)));
   mOpenCLBackend.reset((OpenCL::OpenCLBackend *) (mCoDLRuntime->mCLRuntime->onCreate(config))); 
 
-#ifdef CODL_DEBUG
+#ifdef MNN_CODL_DEBUG
   auto size = mOpenCLBackend->getOpenCLRuntime()->getMaxImage2DSize();
   MNN_PRINT("max image size: %ldx%ld\n", size[0], size[1]);
 #endif
