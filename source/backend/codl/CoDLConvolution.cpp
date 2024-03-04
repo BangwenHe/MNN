@@ -20,6 +20,9 @@ CoDLConvolution::CoDLConvolution(Backend *b, const Op *op,
   mCPUOutputs.clear();
   mOCLInputs.clear();
   mOCLOutputs.clear();
+
+  mPartDim = CoDLNodePartitionParam::PART_DIM_IC;
+  mProc = CPUBinary::selectForFloat(BinaryOpOperation_ADD);
 }
 
 ErrorCode CoDLConvolution::onResize(const std::vector<Tensor *> &inputs,
@@ -35,6 +38,7 @@ ErrorCode CoDLConvolution::onResize(const std::vector<Tensor *> &inputs,
   auto param = mBackend->getPartitionParam(n, m, k);
   // CoDLNodePartitionParam param{CoDLNodePartitionParam::PART_DIM_IC, 0.6};
   int numTensor = inputs.size();
+  mPartDim = param.mPartDim;
 
   for (int i = 0; i < numTensor; i++) {
     auto input = inputs[i];
@@ -106,6 +110,77 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
 #ifdef MNN_CODL_DEBUG
   }
 #endif
+
+#ifdef MNN_CODL_DEBUG
+  {
+    AutoTime _t(__LINE__, __func__);
+#endif
+
+  if (mPartDim == CoDLNodePartitionParam::PART_DIM_IC) {
+    if (mProc != nullptr) {
+      int n = mCPUOutputs.size();
+      for (int i = 0; i < n; i++) {
+        // 1. 将 GPU 上的输出数据拷贝到 CPU 上
+        auto *gpuTensor = mOCLOutputs[i];
+        auto *mapPtr = gpuTensor->map(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType());
+        auto *cpuTensor = mCPUOutputs[i];
+        auto *cpuPtr = cpuTensor->host<float>();
+        auto *originPtr = outputs[i]->host<float>();
+
+        // 2. 将 CPU 上的数据与 GPU 上的数据相加
+        mProc(originPtr, cpuPtr, mapPtr, cpuTensor->elementSize(), 0);
+
+        // 3. 将相加后的数据拷贝到 GPU 上
+        std::memcpy(cpuPtr, originPtr, cpuTensor->size());
+        std::memcpy(mapPtr, originPtr, cpuTensor->size());
+
+        gpuTensor->unmap(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType(), mapPtr);
+      }
+    } else {
+      MNN_PRINT("%s:%d: Unsupported binary operation\n", __FILE__, __LINE__);
+    }
+  } else if (mPartDim == CoDLNodePartitionParam::PART_DIM_OC) {
+    int n = mCPUOutputs.size();
+    for (int i = 0; i < n; i++) {
+      auto *gpuTensor = mOCLOutputs[i];
+      auto *mapPtr = static_cast<float*>(gpuTensor->map(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType()));
+      auto *cpuTensor = mCPUOutputs[i];
+      auto *cpuPtr = cpuTensor->host<float>();
+      auto *originPtr = outputs[i]->host<float>();
+
+      int batch = outputs[i]->batch();
+      int k = outputs[i]->channel();
+      int cpuK = mCPUOutputs[i]->channel();
+      int gpuK = mOCLOutputs[i]->channel();
+      for (int j = 0; j < batch; j++) {
+        std::memcpy(originPtr + j * k, cpuPtr + j * cpuK, cpuK * sizeof(float));
+        std::memcpy(originPtr + j * k + cpuK, mapPtr + j * gpuK, gpuK * sizeof(float));
+      }
+
+      gpuTensor->unmap(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType(), mapPtr);
+    }
+  } else if (mPartDim == CoDLNodePartitionParam::PART_DIM_N) {
+    int n = mCPUOutputs.size();
+    for (int i = 0; i < n; i++) {
+      auto *gpuTensor = mOCLOutputs[i];
+      auto *mapPtr = gpuTensor->map(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType());
+      auto *cpuTensor = mCPUOutputs[i];
+      auto *cpuPtr = cpuTensor->host<float>();
+      auto *originPtr = outputs[i]->host<float>();
+
+      std::memcpy(originPtr, cpuPtr, cpuTensor->size());
+      std::memcpy(originPtr + cpuTensor->size(), mapPtr, gpuTensor->size());
+
+      gpuTensor->unmap(Tensor::MAP_TENSOR_WRITE, gpuTensor->getDimensionType(), mapPtr);
+    }
+  } else {
+    MNN_ERROR("Unsupported partition dimension\n");
+  }
+
+#ifdef MNN_CODL_DEBUG
+  }
+#endif
+
   return ret1 == NO_ERROR ? ret2 : ret1;
 }
 

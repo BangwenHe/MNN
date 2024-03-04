@@ -27,6 +27,12 @@ CoDLPartitionStrategy::CoDLPartitionStrategy(const std::string &jsonFile) {
   std::string content((std::istreambuf_iterator<char>(ifs)),
                       (std::istreambuf_iterator<char>()));
 
+  // if json file not exist, use default partition strategy
+  if (content.empty()) {
+    MNN_PRINT("json file not exist, use default partition strategy\n");
+    return;
+  }
+
   // parse json string
   rapidjson::Document doc;
   doc.Parse(content.c_str());

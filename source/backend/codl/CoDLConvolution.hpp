@@ -5,6 +5,8 @@
 #include "backend/codl/CoDLBackend.hpp"
 #include "core/Backend.hpp"
 #include "core/Execution.hpp"
+#include "backend/cpu/CPUBinary.hpp"
+
 namespace MNN {
 
 class CoDLConvolution : public Execution {
@@ -22,6 +24,9 @@ private:
     std::shared_ptr<Execution> mOCLConvolution;
     std::vector<Tensor *> mCPUInputs, mCPUOutputs;
     std::vector<Tensor *> mOCLInputs, mOCLOutputs;
+
+    CoDLNodePartitionParam::PartDim mPartDim;
+    MNNBinaryExecute mProc;
 };
 
 }
