@@ -77,6 +77,7 @@ Profiler::Record& Profiler::getTypedRecord(const OperatorInfo* op) {
     record.calledTimes = 0;
     record.type        = op->type();
     record.flops       = 0.0f;
+    record.minTime     = 1000.0f;
 
     return record;
 }
@@ -95,6 +96,7 @@ Profiler::Record& Profiler::getNamedRecord(const OperatorInfo* op) {
     record.name        = op->name();
     record.type        = op->type();
     record.flops       = 0.0f;
+    record.minTime     = 1000.0f;
 
     return record;
 }
@@ -113,7 +115,9 @@ void Profiler::end(const OperatorInfo* info) {
     mEndTime   = getTime();
     float cost = (float)(mEndTime - mStartTime) / 1000.0f;
     mMapByType[info->type()].costTime += cost;
+    mMapByType[info->type()].minTime = std::min(mMapByType[info->type()].minTime, cost);
     mMapByName[info->name()].costTime += cost;
+    mMapByName[info->name()].minTime = std::min(mMapByName[info->name()].minTime, cost);
     mTotalTime += cost;
 }
 
@@ -177,7 +181,7 @@ void Profiler::printTimeByType(int loops) {
 }
 
 void Profiler::printTimeByName(int loops) {
-    const std::vector<std::string> header = {"Node Name", "Op Type", "Avg(ms)", "%", "Flops Rate"};
+    const std::vector<std::string> header = {"Node Name", "Op Type", "Avg(ms)", "Min(ms)", "%", "Flops Rate"};
     std::vector<std::vector<std::string>> rows;
     // sort by name
     for (auto iter: mMapByName) {
@@ -186,6 +190,7 @@ void Profiler::printTimeByName(int loops) {
         columns.push_back(iter.first);
         columns.push_back(record.type);
         columns.push_back(toString(record.costTime / (float)loops));
+        columns.push_back(toString(record.minTime));
         columns.push_back(toString((record.costTime / (float)mTotalTime) * 100));
         columns.push_back(toString((record.flops / (float)mTotalMFlops) * 100));
         rows.emplace_back(columns);

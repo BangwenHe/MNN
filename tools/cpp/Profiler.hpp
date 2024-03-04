@@ -62,6 +62,7 @@ private:
         int64_t calledTimes;
         float costTime;
         float flops;
+        float minTime;
     };
 
     static Profiler* gInstance;
