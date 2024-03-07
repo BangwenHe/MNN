@@ -174,6 +174,7 @@ ErrorCode StrassenMatrixComputor::_generateBasicMatMul(int e, int l, int h, cons
     int eP, lP, hP;
     core->MNNGetMatMulPackMode(&eP, &lP, &hP);
     int lLimit = 32768 / (std::min(eP, e) + hP);
+    // MNN_PRINT("e=%d, l=%d, h=%d, eP=%d, lP=%d, hP=%d, lLimit=%d\n", e, l, h, eP, lP, hP, lLimit);
     if (l <= lLimit) {
         return _generateTrivalMatMul(e, l, h, AT, BT, CT, COT, postParameters);
     }
@@ -195,6 +196,7 @@ ErrorCode StrassenMatrixComputor::_generateBasicMatMul(int e, int l, int h, cons
     auto numberThread = mSupportMultiThread ? ((CPUBackend*)backend())->threadNumber() : 1;
     auto cHeight = UP_DIV(h, core->pack);
 
+    // MNN_PRINT("unit: %d\n", unit);
     for (int i=0; i<unit; ++i) {
         int lS = i * lLimit;
         int lE = lS + lLimit;
@@ -225,6 +227,7 @@ ErrorCode StrassenMatrixComputor::_generateBasicMatMul(int e, int l, int h, cons
         };
         mFunctions.emplace_back(std::make_pair(f1, numberThread));
     }
+    // MNN_PRINT("postParameters size: %ld\n", postParameters.size());
     if (!postParameters.empty() && COT.stackIndex >= 0) {
         if (1 == numberThread) {
             auto postFunction = [CT, COT, e, cHeight, numberThread, postParameters, core, this](int tId) {
