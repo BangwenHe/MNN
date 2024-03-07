@@ -67,6 +67,12 @@ public:
     ErrorCode resize();
 
     /**
+     * @brief do partition for the session.
+     * @return result code.
+    */
+    ErrorCode partition();
+
+    /**
      * @brief set if needs resize.
      * @param flag  needs resize or not.
      */

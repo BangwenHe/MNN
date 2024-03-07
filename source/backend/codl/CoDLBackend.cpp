@@ -65,6 +65,10 @@ CoDLNodePartitionParam CoDLPartitionStrategy::getPartitionParam(int n, int m, in
   }
 }
 
+void CoDLPartitionStrategy::setPartitionParam(int n, int m, int k, CoDLNodePartitionParam param) {
+  mPartitionMap[std::make_tuple(n, m, k)] = param;
+}
+
 CoDLRuntime::CoDLRuntime(const Backend::Info& info) { 
   Backend::Info cpuInfo;
   cpuInfo.numThread = info.numThread;

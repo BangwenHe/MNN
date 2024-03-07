@@ -17,6 +17,7 @@ void CoDLCPUGPUMemPack::resizeMempack(Tensor *tensor, const std::vector<int> &cp
   auto format = TensorUtils::getDescribe(tensor)->dimensionFormat;
 
   // TODO: 释放内存并重新创建, 或者添加 offset
+  // MARK: 由于前面创建的时候创建了一大块的内存, 所以这里只需要修改 shape 和 stride 即可, 这样计算结果肯定是错的
 
   {
     int n = cpuNewShape[0];

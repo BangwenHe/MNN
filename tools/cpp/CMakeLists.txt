@@ -39,6 +39,9 @@ list(APPEND MNN_CPP_TOOLS checkInvalidValue.out)
 add_executable(timeProfile.out ${CMAKE_CURRENT_LIST_DIR}/timeProfile.cpp ${CMAKE_CURRENT_LIST_DIR}/revertMNNModel.cpp ${CMAKE_CURRENT_LIST_DIR}/Profiler.cpp)
 list(APPEND MNN_CPP_TOOLS timeProfile.out)
 
+add_executable(testPartition.out ${CMAKE_CURRENT_LIST_DIR}/testPartition.cpp)
+list(APPEND MNN_CPP_TOOLS testPartition.out)
+
 add_executable(testTrain.out ${CMAKE_CURRENT_LIST_DIR}/testTrain.cpp)
 list(APPEND MNN_CPP_TOOLS testTrain.out)
 

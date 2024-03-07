@@ -261,6 +261,7 @@ public:
      */
     void resizeSession(Session* session, int needRelloc);
 
+    void partitionSession(Session* session);
     
     /**
      * @brief call this function if don't need resize or create session any more, it will save a few memory that equal

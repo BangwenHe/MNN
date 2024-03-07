@@ -37,6 +37,7 @@ public:
   CoDLPartitionStrategy(const std::string &jsonFile);
 
   CoDLNodePartitionParam getPartitionParam(int n, int m, int k);
+  void setPartitionParam(int n, int m, int k, CoDLNodePartitionParam param);
 
 private:
   std::string mJsonFile;
@@ -108,6 +109,10 @@ public:
 
   CoDLNodePartitionParam getPartitionParam(int n, int m, int k) {
     return mPartitionStrategy->getPartitionParam(n, m, k);
+  }
+
+  void setPartitionParam(int n, int m, int k, CoDLNodePartitionParam param) {
+    mPartitionStrategy->setPartitionParam(n, m, k, param);
   }
 
   class Creator {

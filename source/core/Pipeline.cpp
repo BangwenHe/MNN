@@ -15,6 +15,9 @@
 #include "geometry/GeometryComputerUtils.hpp"
 #include "shape/SizeComputer.hpp"
 #include "core/OpCommonUtils.hpp"
+#if MNN_CODL_ENABLED
+#include "backend/codl/CoDLBackend.hpp"
+#endif
 
 // TODO: Find better way for debug
 //#define MNN_OP_SEPERATE
@@ -1095,6 +1098,150 @@ ErrorCode Pipeline::executeCallBack(const TensorCallBackWithInfo& before, const 
     }
     mBackend->onExecuteEnd();
     return NO_ERROR;
+}
+
+template <typename T>
+static void printVector(const std::vector<T>& vec) {
+    if (vec.size() == 0) {
+        MNN_PRINT("empty vector\n");
+        return;
+    }
+    for (auto& v : vec) {
+        std::cout << v << ", ";
+    }
+    MNN_PRINT("\n");
+}
+
+ErrorCode Pipeline::partition() {
+#if !defined(MNN_CODL_ENABLED)
+    return NO_ERROR;
+#else
+    auto& mBackend = mInfo.first.cache.first;
+    auto& mBackupBackend = mInfo.first.cache.second;
+
+    // std::tuple<int, int, int> -> n, m, k
+    // std::pair<Execution*, int, float> -> execution*, dim, ratio
+    std::map<std::tuple<int, int, int>, std::tuple<Command*, CoDLNodePartitionParam>> partition;
+
+    mBackend->onExecuteBegin();
+
+    for (auto& info : mInfo.second) {
+        auto& buffer = info.executeBuffer;
+        for (auto& cmdP : buffer.command) {
+            auto& cmd = *cmdP;
+            auto t = cmd.op->type();
+            if (t == OpType_Convolution) {
+                auto conv = cmd.op->main_as_Convolution2D();
+                int n = cmd.workInputs[0]->batch();
+                int m = cmd.workInputs[0]->channel();
+                int k = cmd.workOutputs[0]->channel();
+
+                auto tuple = std::make_tuple(n, m, k);
+                // MNN_PRINT("matrix multiply: n = %d, m = %d, k = %d\n", n, m, k);
+                // ignore mm which batch size is bigger than 1
+                if (partition.find(tuple) == partition.end() && n > 1) {
+                    partition[tuple] = std::make_tuple(cmdP.get(), CoDLNodePartitionParam{CoDLNodePartitionParam::PART_DIM_N, 0.5f});
+                }
+            }
+        }
+    }
+
+    std::vector<CoDLNodePartitionParam::PartDim> dims{CoDLNodePartitionParam::PART_DIM_N, 
+        CoDLNodePartitionParam::PART_DIM_IC, CoDLNodePartitionParam::PART_DIM_OC};
+    std::vector<float> ratios{0.4f, 0.5f, 0.6f};
+
+    for (auto& p : partition) {
+        int n = std::get<0>(p.first);
+        int m = std::get<1>(p.first);
+        int k = std::get<2>(p.first);
+        auto& c = std::get<0>(p.second);
+        auto& param = std::get<1>(p.second);
+        float curLat = 1000.0f;
+
+        // MNN_PRINT("map matrix multiply: n = %d, m = %d, k = %d\n", n, m, k);
+        auto codlBackend = static_cast<CoDLBackend*>(mBackend.get());
+        auto& exe = c->execution;
+        for (auto& dim : dims) {
+            CoDLNodePartitionParam optParam{dim, 0.5f};
+
+            mBackend->onResizeBegin();
+            codlBackend->setPartitionParam(n, m, k, param);
+            exe->onResize(c->workInputs, c->workOutputs);
+            mBackend->onResizeEnd();
+
+            mBackend->onExecuteBegin();
+            auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+            float optCpu = latencies[0];
+            float optGpu = latencies[1];
+            float delta = optCpu - optGpu;
+            float minLat = std::max(optCpu, optGpu);
+            printVector(latencies);
+            mBackend->onExecuteEnd();
+            MNN_PRINT(">>> initial dim: %d, delta: %f, optCpu: %f, optGpu: %f, minLat: %f\n", dim, delta, optCpu, optGpu, minLat);
+
+            float bestRatio = param.mPartRatio;
+            if (delta > 0) {
+                while (delta > 0 && param.mPartRatio > 0.1f) {
+                    param.mPartRatio -= 0.1f;
+                    codlBackend->setPartitionParam(n, m, k, param);
+
+                    mBackend->onResizeBegin();
+                    exe->onResize(c->workInputs, c->workOutputs);
+                    mBackend->onResizeEnd();
+
+                    mBackend->onExecuteBegin();
+                    auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                    float modLatCpu = latencies[0];
+                    float modLatGpu = latencies[1];
+                    float minModLat = std::max(modLatCpu, modLatGpu);
+                    delta = modLatCpu - modLatGpu;
+                    mBackend->onExecuteEnd();
+                    MNN_PRINT("delta: %f, modLatCpu: %f, modLatGpu: %f, minModLat: %f\n", delta, modLatCpu, modLatGpu, minModLat);
+
+                    if (minModLat < minLat) {
+                        minLat = minModLat;
+                        bestRatio = param.mPartRatio;
+                    }
+                }
+            } else {
+                while (delta < 0 && param.mPartRatio < 0.9f) {
+                    param.mPartRatio += 0.1f;
+                    codlBackend->setPartitionParam(n, m, k, param);
+
+                    mBackend->onResizeBegin();
+                    exe->onResize(c->workInputs, c->workOutputs);
+                    mBackend->onResizeEnd();
+
+                    mBackend->onExecuteBegin();
+                    auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                    float modLatCpu = latencies[0];
+                    float modLatGpu = latencies[1];
+                    float minModLat = std::max(modLatCpu, modLatGpu);
+                    delta = modLatCpu - modLatGpu;
+                    mBackend->onExecuteEnd();
+                    MNN_PRINT("delta: %f, modLatCpu: %f, modLatGpu: %f, minModLat: %f\n", delta, modLatCpu, modLatGpu, minModLat);
+
+                    if (minModLat < minLat) {
+                        minLat = minModLat;
+                        bestRatio = param.mPartRatio;
+                    }
+                }
+            }
+
+            optParam.mPartDim = dim;
+            optParam.mPartRatio = bestRatio;
+            if (minLat < curLat) {
+                curLat = minLat;
+                param = optParam;
+            }
+        }
+    
+        MNN_PRINT("n=%d, m=%d, k=%d, dim=%d, ratio=%f, minLat=%f\n", n, m, k, param.mPartDim, param.mPartRatio, curLat);
+    }
+
+    mBackend->onExecuteEnd();
+    return NO_ERROR;
+#endif
 }
 
 Pipeline::~Pipeline() {

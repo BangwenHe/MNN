@@ -52,6 +52,8 @@ public:
         return mInfo;
     }
 
+    ErrorCode partition();
+
     float flops() const {
         return mFlops;
     }

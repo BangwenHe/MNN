@@ -232,6 +232,17 @@ ErrorCode Session::resize() {
 #endif
     return NO_ERROR;
 }
+
+ErrorCode Session::partition() {
+    for (auto& iter : mPipelines) {
+        auto error = iter->partition();
+        if (NO_ERROR != error) {
+            return error;
+        }
+    }
+    return NO_ERROR;
+}
+
 bool Session::getInfo(Interpreter::SessionInfoCode code, void* ptr) const {
     switch (code) {
         case Interpreter::MEMORY: {

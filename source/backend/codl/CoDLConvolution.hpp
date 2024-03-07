@@ -16,8 +16,11 @@ public:
     ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
     virtual ~CoDLConvolution() = default;
     ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
+    std::vector<float> onProfiling(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
 
 private:
+    void postprocess(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs);
+
     const Op *mOp;
     CoDLBackend *mBackend;
     std::shared_ptr<Execution> mCPUConvolution;

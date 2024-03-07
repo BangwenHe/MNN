@@ -474,6 +474,11 @@ void Interpreter::resizeSession(Session* session, int needRelloc) {
     session->resize();
 }
 
+void Interpreter::partitionSession(Session *session) {
+    std::unique_lock<std::mutex> _l(mNet->lock);
+    session->partition();
+}
+
 ErrorCode Interpreter::runSessionWithCallBack(const Session* session, const TensorCallBack& before,
                                               const TensorCallBack& after, bool sync) const {
     auto beforeWrap = [&before](const std::vector<Tensor*>& tensors, const OperatorInfo* info) {

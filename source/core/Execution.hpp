@@ -55,6 +55,16 @@ public:
     virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) = 0;
 
     /**
+     * @brief perform profiling.
+     * @param inputs    input tensors
+     * @param outputs   output tensors
+     * @return profiling result
+     */
+    virtual std::vector<float> onProfiling(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) {
+        return {};
+    }
+
+    /**
      * @brief clone execution, new execution will share weight from this execution
      * @param bn   the cloned' execution's backend
      * @param dst if dst = nullptr, just return whether execution can clone, otherwise clone the execution into dst
