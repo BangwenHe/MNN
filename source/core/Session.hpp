@@ -71,7 +71,7 @@ public:
      * @param resultPath    path to save the partition result.
      * @return result code.
     */
-    ErrorCode partition(const std::string& resultPath);
+    ErrorCode partition(const std::string& resultPath, int benchmarkTimes);
 
     /**
      * @brief set if needs resize.

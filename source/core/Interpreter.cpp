@@ -474,9 +474,9 @@ void Interpreter::resizeSession(Session* session, int needRelloc) {
     session->resize();
 }
 
-void Interpreter::partitionSession(Session *session, const std::string& resultPath) {
+void Interpreter::partitionSession(Session *session, const std::string& resultPath, int benchmarkTimes) {
     std::unique_lock<std::mutex> _l(mNet->lock);
-    session->partition(resultPath);
+    session->partition(resultPath, benchmarkTimes);
 }
 
 ErrorCode Interpreter::runSessionWithCallBack(const Session* session, const TensorCallBack& before,

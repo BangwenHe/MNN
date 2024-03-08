@@ -314,7 +314,7 @@ static int test_main(int argc, const char* argv[]) {
     MNN_PRINT("===========> Session Start partition...\n");
 
     std::string path = "partition.json";
-    net->partitionSession(session, path);
+    net->partitionSession(session, path, runTime);
     MNN_PRINT("===========> Session Partition Done. Save result to %s\n", path.c_str());
 
     return 0;

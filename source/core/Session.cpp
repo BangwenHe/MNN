@@ -233,9 +233,9 @@ ErrorCode Session::resize() {
     return NO_ERROR;
 }
 
-ErrorCode Session::partition(const std::string& resultPath) {
+ErrorCode Session::partition(const std::string& resultPath, int benchmarkTimes) {
     for (auto& iter : mPipelines) {
-        auto error = iter->partition(resultPath);
+        auto error = iter->partition(resultPath, benchmarkTimes);
         if (NO_ERROR != error) {
             return error;
         }

@@ -1116,7 +1116,7 @@ static void printVector(const std::vector<T>& vec) {
     MNN_PRINT("\n");
 }
 
-ErrorCode Pipeline::partition(const std::string& resultPath) {
+ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes) {
 #if !defined(MNN_CODL_ENABLED)
     return NO_ERROR;
 #else
@@ -1151,7 +1151,6 @@ ErrorCode Pipeline::partition(const std::string& resultPath) {
     std::vector<CoDLNodePartitionParam::PartDim> dims{CoDLNodePartitionParam::PART_DIM_N, 
         CoDLNodePartitionParam::PART_DIM_IC, CoDLNodePartitionParam::PART_DIM_OC};
     std::vector<float> ratios{0.4f, 0.5f, 0.6f};
-    int benchmarkTimes = 10;
 
     for (auto& p : partition) {
         int n = std::get<0>(p.first);
