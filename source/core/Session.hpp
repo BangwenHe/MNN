@@ -68,9 +68,10 @@ public:
 
     /**
      * @brief do partition for the session.
+     * @param resultPath    path to save the partition result.
      * @return result code.
     */
-    ErrorCode partition();
+    ErrorCode partition(const std::string& resultPath);
 
     /**
      * @brief set if needs resize.

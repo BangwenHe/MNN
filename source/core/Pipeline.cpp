@@ -17,6 +17,10 @@
 #include "core/OpCommonUtils.hpp"
 #if MNN_CODL_ENABLED
 #include "backend/codl/CoDLBackend.hpp"
+#include "rapidjson/document.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/writer.h"
+#include <fstream>
 #endif
 
 // TODO: Find better way for debug
@@ -1112,7 +1116,7 @@ static void printVector(const std::vector<T>& vec) {
     MNN_PRINT("\n");
 }
 
-ErrorCode Pipeline::partition() {
+ErrorCode Pipeline::partition(const std::string& resultPath) {
 #if !defined(MNN_CODL_ENABLED)
     return NO_ERROR;
 #else
@@ -1122,8 +1126,6 @@ ErrorCode Pipeline::partition() {
     // std::tuple<int, int, int> -> n, m, k
     // std::pair<Execution*, int, float> -> execution*, dim, ratio
     std::map<std::tuple<int, int, int>, std::tuple<Command*, CoDLNodePartitionParam>> partition;
-
-    mBackend->onExecuteBegin();
 
     for (auto& info : mInfo.second) {
         auto& buffer = info.executeBuffer;
@@ -1149,6 +1151,7 @@ ErrorCode Pipeline::partition() {
     std::vector<CoDLNodePartitionParam::PartDim> dims{CoDLNodePartitionParam::PART_DIM_N, 
         CoDLNodePartitionParam::PART_DIM_IC, CoDLNodePartitionParam::PART_DIM_OC};
     std::vector<float> ratios{0.4f, 0.5f, 0.6f};
+    int benchmarkTimes = 10;
 
     for (auto& p : partition) {
         int n = std::get<0>(p.first);
@@ -1156,11 +1159,12 @@ ErrorCode Pipeline::partition() {
         int k = std::get<2>(p.first);
         auto& c = std::get<0>(p.second);
         auto& param = std::get<1>(p.second);
-        float curLat = 1000.0f;
+        float minLat = 1000.0f;
 
         // MNN_PRINT("map matrix multiply: n = %d, m = %d, k = %d\n", n, m, k);
         auto codlBackend = static_cast<CoDLBackend*>(mBackend.get());
         auto& exe = c->execution;
+        CoDLNodePartitionParam bestParam = param;
         for (auto& dim : dims) {
             CoDLNodePartitionParam optParam{dim, 0.5f};
 
@@ -1170,76 +1174,128 @@ ErrorCode Pipeline::partition() {
             mBackend->onResizeEnd();
 
             mBackend->onExecuteBegin();
-            auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
-            float optCpu = latencies[0];
-            float optGpu = latencies[1];
+            float optCpu = 0.0f, optGpu = 0.0f;
+            for (int i = 0; i < benchmarkTimes; i++) {
+                auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                // printVector(latencies);
+                optCpu += latencies[0];
+                optGpu += latencies[1];
+            }
+            optCpu /= benchmarkTimes;
+            optGpu /= benchmarkTimes;
             float delta = optCpu - optGpu;
-            float minLat = std::max(optCpu, optGpu);
-            printVector(latencies);
+            float dimMinLat = std::max(optCpu, optGpu);
             mBackend->onExecuteEnd();
-            MNN_PRINT(">>> initial dim: %d, delta: %f, optCpu: %f, optGpu: %f, minLat: %f\n", dim, delta, optCpu, optGpu, minLat);
+            MNN_PRINT(">>> initial dim: %d, delta: %f, optCpu: %f, optGpu: %f, dimMinLat: %f, ratio: %f\n", 
+                        dim, delta, optCpu, optGpu, dimMinLat, optParam.mPartRatio);
 
-            float bestRatio = param.mPartRatio;
+            float bestRatio = optParam.mPartRatio;
             if (delta > 0) {
-                while (delta > 0 && param.mPartRatio > 0.1f) {
-                    param.mPartRatio -= 0.1f;
-                    codlBackend->setPartitionParam(n, m, k, param);
+                while (delta > 0 && optParam.mPartRatio > 0.1f) {
+                    optParam.mPartRatio -= 0.1f;
+                    codlBackend->setPartitionParam(n, m, k, optParam);
 
                     mBackend->onResizeBegin();
                     exe->onResize(c->workInputs, c->workOutputs);
                     mBackend->onResizeEnd();
 
                     mBackend->onExecuteBegin();
-                    auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
-                    float modLatCpu = latencies[0];
-                    float modLatGpu = latencies[1];
-                    float minModLat = std::max(modLatCpu, modLatGpu);
+                    float modLatCpu = 0.0f, modLatGpu = 0.0f;
+                    for (int i = 0; i < benchmarkTimes; i++) {
+                        auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                        modLatCpu += latencies[0];
+                        modLatGpu += latencies[1];
+                    }
+                    modLatCpu /= benchmarkTimes;
+                    modLatGpu /= benchmarkTimes;
+                    float modLat = std::max(modLatCpu, modLatGpu);
                     delta = modLatCpu - modLatGpu;
                     mBackend->onExecuteEnd();
-                    MNN_PRINT("delta: %f, modLatCpu: %f, modLatGpu: %f, minModLat: %f\n", delta, modLatCpu, modLatGpu, minModLat);
 
-                    if (minModLat < minLat) {
-                        minLat = minModLat;
-                        bestRatio = param.mPartRatio;
+                    if (modLat < dimMinLat) {
+                        dimMinLat = modLat;
+                        bestRatio = optParam.mPartRatio;
                     }
+
+                    MNN_PRINT("dim: %d, delta: %f, modLatCpu: %f, modLatGpu: %f, modLat: %f, dimMinLat: %f, ratio: %f\n", 
+                                dim, delta, modLatCpu, modLatGpu, modLat, dimMinLat, optParam.mPartRatio);
                 }
             } else {
-                while (delta < 0 && param.mPartRatio < 0.9f) {
-                    param.mPartRatio += 0.1f;
-                    codlBackend->setPartitionParam(n, m, k, param);
+                while (delta < 0 && optParam.mPartRatio < 0.9f) {
+                    optParam.mPartRatio += 0.1f;
+                    codlBackend->setPartitionParam(n, m, k, optParam);
 
                     mBackend->onResizeBegin();
                     exe->onResize(c->workInputs, c->workOutputs);
                     mBackend->onResizeEnd();
 
                     mBackend->onExecuteBegin();
-                    auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
-                    float modLatCpu = latencies[0];
-                    float modLatGpu = latencies[1];
-                    float minModLat = std::max(modLatCpu, modLatGpu);
+                    float modLatCpu = 0.0f, modLatGpu = 0.0f;
+                    for (int i = 0; i < benchmarkTimes; i++) {
+                        auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                        modLatCpu += latencies[0];
+                        modLatGpu += latencies[1];
+                    }
+                    modLatCpu /= benchmarkTimes;
+                    modLatGpu /= benchmarkTimes;
+                    float modLat = std::max(modLatCpu, modLatGpu);
                     delta = modLatCpu - modLatGpu;
                     mBackend->onExecuteEnd();
-                    MNN_PRINT("delta: %f, modLatCpu: %f, modLatGpu: %f, minModLat: %f\n", delta, modLatCpu, modLatGpu, minModLat);
 
-                    if (minModLat < minLat) {
-                        minLat = minModLat;
-                        bestRatio = param.mPartRatio;
+                    if (modLat < dimMinLat) {
+                        dimMinLat = modLat;
+                        bestRatio = optParam.mPartRatio;
                     }
+
+                    MNN_PRINT("dim: %d, delta: %f, modLatCpu: %f, modLatGpu: %f, modLat: %f, dimMinLat: %f, ratio: %f\n", 
+                                dim, delta, modLatCpu, modLatGpu, modLat, dimMinLat, optParam.mPartRatio);
                 }
             }
 
-            optParam.mPartDim = dim;
-            optParam.mPartRatio = bestRatio;
-            if (minLat < curLat) {
-                curLat = minLat;
-                param = optParam;
+            if (dimMinLat < minLat) {
+                minLat = dimMinLat;
+                optParam.mPartRatio = bestRatio;
+                bestParam = optParam;
             }
         }
     
-        MNN_PRINT("n=%d, m=%d, k=%d, dim=%d, ratio=%f, minLat=%f\n", n, m, k, param.mPartDim, param.mPartRatio, curLat);
+        param = bestParam;
+        MNN_PRINT("====> n=%d, m=%d, k=%d, dim=%d, ratio=%f, minLat=%f\n", n, m, k, param.mPartDim, param.mPartRatio, minLat);
     }
 
-    mBackend->onExecuteEnd();
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    std::ofstream ofs(resultPath);
+    
+    writer.StartArray();
+    // 数组中保存 n m k dim ratio 参数
+    for (auto& p : partition) {
+        int n = std::get<0>(p.first);
+        int m = std::get<1>(p.first);
+        int k = std::get<2>(p.first);
+        auto& param = std::get<1>(p.second);
+        rapidjson::Value obj(rapidjson::kObjectType);
+
+        writer.StartObject();
+        writer.Key("n");
+        writer.Int(n);
+        writer.Key("m");
+        writer.Int(m);
+        writer.Key("k");
+        writer.Int(k);
+        writer.Key("dim");
+        writer.Int(param.mPartDim);
+        writer.Key("ratio");
+        writer.Double(param.mPartRatio * 10.0f);
+        writer.Key("min_time");
+        writer.Double(0.0);
+        writer.Key("max_time");
+        writer.Double(0.0);
+        writer.EndObject();
+    }
+    writer.EndArray();
+    ofs << buffer.GetString();
+
     return NO_ERROR;
 #endif
 }

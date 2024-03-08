@@ -52,7 +52,7 @@ public:
         return mInfo;
     }
 
-    ErrorCode partition();
+    ErrorCode partition(const std::string& resultPath);
 
     float flops() const {
         return mFlops;
