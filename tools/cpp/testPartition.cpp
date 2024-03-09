@@ -162,7 +162,7 @@ static inline int64_t getTimeInUs() {
 static int test_main(int argc, const char* argv[]) {
     if (argc < 2) {
         MNN_PRINT("========================================================================\n");
-        MNN_PRINT("Arguments: model.MNN runLoops runMask forwardType numberThread precision inputSize \n");
+        MNN_PRINT("Arguments: model.MNN runLoops savePath \n");
         MNN_PRINT("========================================================================\n");
         return -1;
     }
@@ -182,61 +182,11 @@ static int test_main(int argc, const char* argv[]) {
         runTime = ::atoi(argv[2]);
     }
 
-    int runMask = 0;
-    if (argc > 3) {
-        runMask = atoi(argv[3]);
-    }
-    int saveOutput = 0;
-    if ((runMask & 1) || (runMask & 2)) {
-        MNN_PRINT("Save AllTensors to output/*.txt\n");
-        saveOutput = 1;
-    }
-    int saveInput = 0;
-    if (runMask & 2) {
-        saveInput = 1;
-    }
-    bool autoBackend = false;
-    if (runMask & 16) {
-        autoBackend = true;
-    }
     auto type = MNN_FORWARD_USER_2;
-    if (argc > 4) {
-        type = (MNNForwardType)atoi(argv[4]);
-        MNN_PRINT("Use extra forward type: %d\n", type);
+    std::string savePath = "partition.json";
+    if (argc > 3) {
+        savePath = argv[3];
     }
-
-    int modeNum = 4;
-    if (argc > 5) {
-        modeNum = ::atoi(argv[5]);
-    }
-    int precision = BackendConfig::Precision_Low;
-    int memory = BackendConfig::Memory_Normal;
-    if (argc > 6) {
-        int mask = atoi(argv[6]);
-        precision = mask % 4;
-        memory = (mask / 4) % 4;
-    }
-    // input dims
-    std::vector<int> inputDims;
-    if (argc > 7) {
-        std::string inputShape(argv[7]);
-        const char* delim = "x";
-        std::ptrdiff_t p1 = 0, p2;
-        while (1) {
-            p2 = inputShape.find(delim, p1);
-            if (p2 != std::string::npos) {
-                inputDims.push_back(atoi(inputShape.substr(p1, p2 - p1).c_str()));
-                p1 = p2 + 1;
-            } else {
-                inputDims.push_back(atoi(inputShape.substr(p1).c_str()));
-                break;
-            }
-        }
-    }
-    for (auto dim : inputDims) {
-        MNN_PRINT("%d ", dim);
-    }
-    MNN_PRINT("\n");
 
     // create net
     MNN_PRINT("Open Model %s\n", fileName);
@@ -247,19 +197,15 @@ static int test_main(int argc, const char* argv[]) {
     }
     net->setCacheFile(".tempcache");
     net->setSessionMode(Interpreter::Session_Debug);
-    if (autoBackend) {
-        net->setSessionMode(Interpreter::Session_Backend_Auto);
-        net->setSessionHint(Interpreter::MAX_TUNING_NUMBER, 15);
-    }
-    if (!inputDims.empty()) {
-        net->setSessionMode(Interpreter::Session_Resize_Defer);
-    }
 
     // create session
+    int numThread = 4;
+    int precision = BackendConfig::Precision_Low;
+    int memory = BackendConfig::Memory_Normal;
     MNN::ScheduleConfig config;
     config.type      = type;
     /*modeNum means gpuMode for GPU usage, Or means numThread for CPU usage.*/
-    config.numThread = modeNum;
+    config.numThread = numThread;
     // If type not fount, let it failed
     config.backupType = type;
     BackendConfig backendConfig;
@@ -277,12 +223,6 @@ static int test_main(int argc, const char* argv[]) {
             return 0;
         }
         inputTensor = net->getSessionInput(session, NULL);
-        if (!inputDims.empty()) {
-            MNN_PRINT("===========> Resize Again...\n");
-            net->resizeTensor(inputTensor, inputDims);
-            net->resizeSession(session);
-            //Set when size is changed, After resizeSession
-        }
     }
     int resizeStatus = 0;
     net->getSessionInfo(session, MNN::Interpreter::RESIZE_STATUS, &resizeStatus);
@@ -313,9 +253,8 @@ static int test_main(int argc, const char* argv[]) {
     MNN_PRINT("===========> Session Resize Done.\n");
     MNN_PRINT("===========> Session Start partition...\n");
 
-    std::string path = "partition.json";
-    net->partitionSession(session, path, runTime);
-    MNN_PRINT("===========> Session Partition Done. Save result to %s\n", path.c_str());
+    net->partitionSession(session, savePath, runTime);
+    MNN_PRINT("===========> Session Partition Done. Save result to %s\n", savePath.c_str());
 
     return 0;
 }
