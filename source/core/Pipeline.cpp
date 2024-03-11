@@ -597,7 +597,7 @@ static ErrorCode _createExecutions(Schedule::PipelineInfo& mInfo) {
                 iter.execution.reset(mBackupBackend->onCreate(iter.inputs, iter.outputs, iter.op));
                 if (nullptr == iter.execution) {
                     if (mInfo.first.reportError) {
-                        MNN_ERROR("Create execution error : %d\n", iter.op->type());
+                        MNN_ERROR("Create execution error : %d, name: %s\n", iter.op->type(), iter.info->name().c_str());
                     }
                     return NOT_SUPPORT;
                 }
@@ -1104,6 +1104,7 @@ ErrorCode Pipeline::executeCallBack(const TensorCallBackWithInfo& before, const 
     return NO_ERROR;
 }
 
+#if defined (MNN_CODL_ENABLED)
 template <typename T>
 static void printVector(const std::vector<T>& vec) {
     if (vec.size() == 0) {
@@ -1115,6 +1116,7 @@ static void printVector(const std::vector<T>& vec) {
     }
     MNN_PRINT("\n");
 }
+#endif
 
 ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes) {
 #if !defined(MNN_CODL_ENABLED)

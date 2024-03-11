@@ -224,6 +224,7 @@ OpenCLRuntime::OpenCLRuntime(const BackendConfig::PrecisionMode precision, const
                 permitFloat16 = true;
             }
             mIsSupportedFP16 = mIsDeviceSupportedFP16 && permitFloat16;
+            MNN_PRINT("opencl support fp16: %d, device support fp16: %d, permit fp16: %d\n", mIsSupportedFP16, mIsDeviceSupportedFP16, permitFloat16);
 
             if(getDeviceSupportsExtension(*(mFirstGPUDevicePtr.get()), "cl_arm_integer_dot_product_int8")){
                 mSupportDotInt8 = true;

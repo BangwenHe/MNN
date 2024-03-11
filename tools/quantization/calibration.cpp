@@ -844,7 +844,7 @@ void Calibration::_computeQuantError() {
         float avgCosDistance = sumCos / _calibrationFiles.size();
         float avgOverflowRatio = sumOverflow / _calibrationFiles.size();
 
-        MNN_PRINT("%s:  cos distance: %f, overflow ratio: %f\n", name.c_str(), avgCosDistance, avgOverflowRatio);
+        MNN_PRINT("%s:  cos similarity: %f, overflow ratio: %f\n", name.c_str(), avgCosDistance, avgOverflowRatio);
     }
 }
 
