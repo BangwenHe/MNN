@@ -38,13 +38,14 @@
 #include "cpp/ConvertToFullQuant.hpp"
 #include "core/ConvolutionCommon.hpp"
 #include <MNN/expr/Expr.hpp>
+#include "half.hpp"
 
 using namespace MNN::CV;
 using namespace MNN::Train;
 using namespace MNN::Express;
 
-Calibration::Calibration(MNN::NetT* model, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
-    : _originalModel(model), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
+Calibration::Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
+    : _originalModel(model), _halfModel(halfModel), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
     // when the format of input image is RGB/BGR, channels equal to 3, GRAY is 1
     _channels = 3;
 
@@ -305,6 +306,8 @@ void Calibration::_resizeIfNeeded(std::string filename, bool force) {
         _interpreter->resizeSession(_session);
         _interpreterOrigin->resizeTensor(_inputTensorOrigin, _inputTensorDims);
         _interpreterOrigin->resizeSession(_sessionOrigin);
+        // _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
+        // _interpreterHalf->resizeSession(_sessionHalf);
     }
 }
 
@@ -344,12 +347,18 @@ void Calibration::_initMNNSession(const uint8_t* modelBuffer, const int bufferSi
         _interpreterOrigin->resizeSession(_sessionOrigin);
     }
 
+
+    // _interpreterHalf.reset(MNN::Interpreter::createFromBuffer(modelBuffer, bufferSize), MNN::Interpreter::destroy);
+    // _sessionHalf     = _interpreterHalf->createSession(config);
+    // _inputTensorHalf = _interpreterHalf->getSessionInput(_sessionHalf, NULL);
+
     _resizeIfNeeded(_calibrationFiles[0]);
 }
 
 void Calibration::_initMaps() {
     _featureInfo.clear();
     _featureInfoOrigin.clear();
+    _featureInfoHalf.clear();
     _tensorMap.clear();
         // run mnn once, initialize featureMap, opInfo map
     MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
@@ -358,7 +367,7 @@ void Calibration::_initMaps() {
         if (iter != _skip_quant_ops.end()) {
             return false;
         }
-                for (auto t : nTensors) {
+        for (auto t : nTensors) {
             auto des = TensorUtils::getDescribe(t);
             if (des->index >= 0) {
                 _tensorMap[des->index] = t;;
@@ -664,6 +673,67 @@ void Calibration::_fake_quant_weights() {
         }
     }
     DLOG(INFO) << "fake quant weights done.";
+}
+
+
+float CosineSimilarity(const std::vector<float>& a, const std::vector<float>& b) {
+    float dot = 0.0, denom_a = 0.0, denom_b = 0.0;
+    for (size_t i = 0; i < a.size(); i++) {
+        dot += a[i] * b[i];
+        denom_a += a[i] * a[i];
+        denom_b += b[i] * b[i];
+    }
+    return dot / (sqrt(denom_a) * sqrt(denom_b));
+}
+
+void Calibration::_fake_invert_quant_weights() {
+    int n = _originalModel->oplists.size();
+
+    for (int i = 0; i < n; i++) {
+        const auto& op = _originalModel->oplists[i];
+        auto& opHalf = _halfModel->oplists[i];
+        std::vector<std::string>::iterator iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opHalf->name);
+        if (iter != _skip_quant_ops.end()) {
+            continue;
+        }
+
+        const auto opType = opHalf->type;
+        if (opType != MNN::OpType_Convolution && opType != MNN::OpType_ConvolutionDepthwise) {
+            continue;
+        }
+
+        auto param = op->main.AsConvolution2D();
+        auto& quantizedWeights = param->quanParameter->buffer;
+        const int weightSize = static_cast<int32_t>(quantizedWeights.size());
+        const int channel = param->common->outputCount;
+        const int featSize = weightSize / channel;
+        const auto& scales = param->quanParameter->alpha;
+
+        auto paramHalf = opHalf->main.AsConvolution2D();
+        std::vector<half_float::half> halfWeights(weightSize);
+        // invert quant weights
+        for (int i = 0; i < channel; i++) {
+            std::transform(quantizedWeights.begin() + i * featSize, 
+                            quantizedWeights.begin() + (i + 1) * featSize, 
+                            halfWeights.begin() + i * featSize, 
+                            [&](int8_t x) { return half_float::half(x * scales[i]); });
+        }
+
+        paramHalf->quanParameter.reset(new MNN::IDSTQuanT);
+        paramHalf->quanParameter->type = 3;
+        int8_t* halfWeightsPtr = reinterpret_cast<int8_t*>(halfWeights.data());
+        paramHalf->quanParameter->buffer.assign(halfWeightsPtr, halfWeightsPtr + weightSize * sizeof(half_float::half));
+        std::vector<float> quantizedWeightsFloat(weightSize);
+        std::transform(halfWeights.begin(), halfWeights.end(), quantizedWeightsFloat.begin(), 
+                       [](half_float::half x) { return static_cast<float>(x); });
+        
+        float sim = CosineSimilarity(quantizedWeightsFloat, paramHalf->weight);
+        auto name = opHalf->name;
+        MNN_PRINT("op name: %s, weight cosine similarity: %f\n", name.c_str(), sim);
+
+        paramHalf->weight.clear();
+    }
+    DLOG(INFO) << "fake invert quant weights done.";
 }
 
 void Calibration::_insertScale() {
@@ -1000,6 +1070,226 @@ void Calibration::_quantizeModelEMA() {
     }
 }
 
+void Calibration::_computeInvertQuantError() {
+    {
+        flatbuffers::FlatBufferBuilder builderOutput(1024);
+        builderOutput.ForceDefaults(true);
+        auto len = MNN::Net::Pack(builderOutput, _halfModel);
+        builderOutput.Finish(len);
+        _interpreterHalf.reset(MNN::Interpreter::createFromBuffer(builderOutput.GetBufferPointer(), builderOutput.GetSize()), MNN::Interpreter::destroy);
+    }
+    MNN::ScheduleConfig config;
+    // when using opencl as backend, the execution graph will be different from cpu
+    // config.type = MNN_FORWARD_OPENCL;
+    config.type = MNN_FORWARD_CPU;
+    MNN::BackendConfig backendConfig;
+    backendConfig.precision = MNN::BackendConfig::Precision_Low;
+    _sessionHalf = _interpreterHalf->createSession(config);
+    _inputTensorHalf = _interpreterHalf->getSessionInput(_sessionHalf, NULL);
+    _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
+    _interpreterHalf->resizeSession(_sessionHalf);
+
+    // init _featureInfoHalf
+    MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        auto opName = info->name();
+        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        if (iter != _skip_quant_ops.end()) {
+            return false;
+        }
+        if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
+            int i = 0;
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
+                        new TensorStatistic(t, _featureQuantizeMethod, opName + " input_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                }
+                i++;
+            }
+        }
+        return true;
+    };
+    MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        auto opName = info->name();
+        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        if (iter != _skip_quant_ops.end()) {
+            return false;
+        }
+        if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
+            int i = 0;
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
+                        new TensorStatistic(t, _featureQuantizeMethod, opName + " output_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                }
+                i++;
+            }
+        }
+        return true;
+    };
+    _interpreterHalf->runSessionWithCallBackInfo(_sessionHalf, before, after);
+
+    int count = 0;
+    std::map<std::string, std::vector<float>> overflowRatiosMap;
+    std::map<std::string, std::vector<float>> tensorCosDistanceMap;
+    std::map<std::string, std::vector<float>> tensorCosDistanceMapHalf;
+
+
+   std::string targetOpName = "/embeddings/patch_embeddings/projection/Conv_output_0"; 
+
+    for (const auto& file : _calibrationFiles) {
+        count++;
+        _resizeIfNeeded(file, true);
+        _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
+        _interpreterHalf->resizeSession(_sessionHalf);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensor, _inputType);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensorHalf, _inputType);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensorOrigin, _inputType);
+
+        std::map<std::string, std::vector<float>> fakeQuantedFeatures;
+        std::map<std::string, std::vector<float>> fakeHalfFeatures;
+
+        MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfo.find(t) != _featureInfo.end()) {
+                    if (_featureInfo[t]->visited() == false) {
+                        auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
+                        fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
+                        overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfo.find(t) != _featureInfo.end()) {
+                    if (_featureInfo[t]->visited() == false) {
+                        auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
+                        fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
+                        overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
+                    }
+                }
+            }
+            return true;
+        };
+
+        for (auto& iter : _featureInfo) {
+            iter.second->setVisited(false);
+        }
+        _interpreter->runSessionWithCallBackInfo(_session, before, after);
+
+        MNN::TensorCallBackWithInfo beforeHalf =  [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) != _featureInfoHalf.end()) {
+                    if (_featureInfoHalf[t]->visited() == false) {
+                        auto *ptr = t->host<float>();
+                        fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
+                        _featureInfoHalf[t]->setVisited(true);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo afterHalf = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) != _featureInfoHalf.end()) {
+                    if (_featureInfoHalf[t]->visited() == false) {
+                        auto *ptr = t->host<float>();
+                        fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
+                        _featureInfoHalf[t]->setVisited(true);
+                    }
+                }
+            }
+            return true;
+        }; 
+        
+        for (auto& iter : _featureInfoHalf) {
+            iter.second->setVisited(false);
+        }
+        _interpreterHalf->runSessionWithCallBackInfo(_sessionHalf, beforeHalf, afterHalf);
+
+        MNN::TensorCallBackWithInfo beforeOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                    if (_featureInfoOrigin[t]->visited() == false) {
+                        auto& info = _featureInfoOrigin[t];
+                        auto name = _featureInfoOrigin[t]->name();
+                        auto feature = fakeQuantedFeatures[name];
+                        float cosDis = _featureInfoOrigin[t]->computeDistance(feature);
+                        tensorCosDistanceMap[name].emplace_back(cosDis);
+
+                        auto halfFeature = fakeHalfFeatures[name];
+                        float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
+                        tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo afterOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                    if (_featureInfoOrigin[t]->visited() == false) {
+                        auto name = _featureInfoOrigin[t]->name();
+                        auto feature = fakeQuantedFeatures[name];
+                        float cosDis = _featureInfoOrigin[t]->computeDistance(feature);
+                        tensorCosDistanceMap[name].emplace_back(cosDis);
+
+                        auto halfFeature = fakeHalfFeatures[name];
+                        float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
+                        tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
+                    }
+                }
+            }
+            return true;
+        };
+
+        for (auto& iter : _featureInfoOrigin) {
+            iter.second->setVisited(false);
+        }
+        _interpreterOrigin->runSessionWithCallBackInfo(_sessionOrigin, beforeOrigin, afterOrigin);
+
+        MNN_PRINT("\rcomputeDistance: %.2lf %%", (float)count * 100.0f / (float)_calibrationFileNum);
+        fflush(stdout);
+    }
+    MNN_PRINT("\n\nDebug info:\n\n");
+
+    for (auto& iter : tensorCosDistanceMap) {
+        auto name = iter.first;
+        float sumCos = 0.0f, sumOverflow = 0.0f;
+        for (int i = 0; i < iter.second.size(); i++) {
+            sumCos += iter.second[i];
+            sumOverflow += overflowRatiosMap[name][i];
+        }
+        float avgCosDistance = sumCos / _calibrationFiles.size();
+        float avgOverflowRatio = sumOverflow / _calibrationFiles.size();
+
+        float sumCosHalf = 0.0f;
+        for (int i = 0; i < tensorCosDistanceMapHalf[name].size(); i++) {
+            sumCosHalf += tensorCosDistanceMapHalf[name][i];
+        }
+        float avgCosDistanceHalf = sumCosHalf / _calibrationFiles.size();
+
+        MNN_PRINT("int8 %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
+                    name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
+    }
+}
+
 void Calibration::runQuantizeModel() {
     if (_featureQuantizeMethod == "EMA") {
         _quantizeModelEMA();
@@ -1011,10 +1301,16 @@ void Calibration::runQuantizeModel() {
     } else if (_featureQuantizeMethod == "ADMM") {
         _computeFeatureScaleADMM();
     }
-    if (_debug) {
-        _computeQuantError();
-    }
+    // if (_debug) {
+    //     _computeQuantError();
+    // }
     _insertScale();
+
+    if (_debug) {
+        _fake_invert_quant_weights();
+        _computeInvertQuantError();
+    }
+
     ComputeUnaryBuffer(_originalModel);
 
     {
@@ -1291,13 +1587,18 @@ int quant_main(int argc, const char* argv[]) {
     std::unique_ptr<uint8_t> modelOriginal(new uint8_t[size]);
     memcpy(modelOriginal.get(), ocontent, size);
 
+    std::unique_ptr<uint8_t> modelHalfBuffer(new uint8_t[size]);
+    memcpy(modelHalfBuffer.get(), ocontent, size);
+
     netT.reset();
     netT = MNN::UnPackNet(modelOriginal.get());
+
+    std::unique_ptr<MNN::NetT> netTHalf = MNN::UnPackNet(modelHalfBuffer.get());
 
     // quantize model's weight
     DLOG(INFO) << "Calibrate the feature and quantize model...";
     std::shared_ptr<Calibration> calibration(
-        new Calibration(netT.get(), modelForInference.get(), size, preTreatConfig, std::string(modelFile), std::string(dstFile)));
+        new Calibration(netT.get(), netTHalf.get(), modelForInference.get(), size, preTreatConfig, std::string(modelFile), std::string(dstFile)));
     if (!calibration->valid()) {
         return 0;
     }

@@ -27,7 +27,7 @@
 // 5. compute the (input_scale * weight_scale) / output_scale, update the scale of symmetricQuan in Convolution Paramter
 class Calibration {
 public:
-    Calibration(MNN::NetT* model, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string dstModelFile);
+    Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string dstModelFile);
 
     void runQuantizeModel();
     
@@ -39,6 +39,7 @@ public:
 private:
     Calibration();
     MNN::NetT* _originalModel;
+    MNN::NetT* _halfModel;
     std::shared_ptr<MNN::CV::ImageProcess> _process;
     bool mValid = true;
     const int _binNums = 2048;
@@ -60,6 +61,7 @@ private:
     // Tensor and Info
     std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfo;
     std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfoOrigin;
+    std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfoHalf;
     std::map<int, const MNN::Tensor*> _tensorMap;
     
     // The scale results
@@ -74,6 +76,10 @@ private:
     std::shared_ptr<MNN::Interpreter> _interpreterOrigin;
     MNN::Session* _sessionOrigin;
     MNN::Tensor* _inputTensorOrigin;
+
+    std::shared_ptr<MNN::Interpreter> _interpreterHalf;
+    MNN::Session* _sessionHalf;
+    MNN::Tensor* _inputTensorHalf;
 
     std::string _featureQuantizeMethod = "KL";
     std::string _weightQuantizeMethod  = "MAX_ABS";
@@ -96,7 +102,9 @@ private:
     void _quantizeModelEMA();
     void _computeFeatureScaleMoving();
     void _fake_quant_weights();
+    void _fake_invert_quant_weights();
     void _computeQuantError();
+    void _computeInvertQuantError();
     void _insertScale();
 };
 int quant_main(int argc, const char* argv[]);
