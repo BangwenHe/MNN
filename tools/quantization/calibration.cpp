@@ -36,13 +36,419 @@
 #include "train/source/optimizer/SGD.hpp"
 #include "train/source/transformer/Transformer.hpp"
 #include "cpp/ConvertToFullQuant.hpp"
+#include "core/ConvolutionCommon.hpp"
+#include <MNN/expr/Expr.hpp>
+#include "half.hpp"
+#include "core/MNNMemoryUtils.h"
 
 using namespace MNN::CV;
 using namespace MNN::Train;
 using namespace MNN::Express;
 
-Calibration::Calibration(MNN::NetT* model, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
-    : _originalModel(model), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
+static inline void *MNNMemoryAllocAlignZeroAlign(size_t size) {
+    return MNNMemoryCallocAlign(size, MNN_MEMORY_ALIGN_DEFAULT);
+}
+static int ReadBlobDim(unsigned char *&myfile, unsigned int* shape, int shapeBufCnt, bool useInt32) {
+    int uSize = myfile[0];
+    myfile++;
+    if (uSize > 4) {
+        printf("Read shape error!\n");
+        return 0;
+    }
+    int copyLength = uSize;
+    if (copyLength > shapeBufCnt) {
+        copyLength = shapeBufCnt;
+    }
+    if (useInt32) {
+        ::memcpy(shape, myfile, sizeof(unsigned int) * copyLength);
+        myfile += copyLength * sizeof(unsigned int);
+    } else {
+        auto myfileint16 = (uint16_t*)myfile;
+        for (int i=0; i<copyLength; ++i) {
+            shape[i] = myfileint16[i];
+        }
+        myfile += copyLength * sizeof(unsigned short);
+    }
+    return copyLength;
+}
+
+static double _log2(double x) {
+    return log(x) / log(2);
+}
+
+static uint32_t atLestBitsCnt(uint32_t n) {
+    for (uint32_t i = 0; i < 32; i++) {
+        int32_t t = n << i;
+        if (t < 0)
+            return 32 - i - (((t << 1) == 0) ? 1 : 0);
+    }
+    return 0;
+}
+
+static void SplitBufToArray(uint8_t *buf, size_t bufLen, uint8_t *arr, size_t arrLen, size_t iNeedBits) {
+    unsigned char cMask = (1 << (iNeedBits)) - 1;
+    unsigned char *tmp  = (unsigned char *)buf;
+    int iOffset         = 0;
+    for (unsigned int i = 0; i < arrLen; i++) {
+        unsigned char idx = 0;
+        long uShift       = 8 - iNeedBits - iOffset % 8;
+        if (uShift < 0) {
+            idx = (tmp[iOffset / 8] << (0 - uShift)) & cMask;
+            idx |= (tmp[(iOffset / 8) + 1] >> (8 + uShift)) & cMask;
+        } else {
+            idx = (tmp[iOffset / 8] >> uShift) & cMask;
+        }
+        iOffset += iNeedBits;
+        if (iOffset % 8 == 0) {
+            tmp += iOffset / 8;
+            iOffset = 0;
+        }
+        arr[i] = idx;
+    }
+}
+
+// fixme!!! not efficiency
+typedef struct _SIMPLE_SET {
+    int8_t *UniSet;
+    uint32_t UniSetSize;
+    uint32_t CurUniCnt;
+} SIMPLE_SET, *PSIMPLE_SET;
+
+static PSIMPLE_SET CreateSimpleSet(uint32_t maxSize) {
+    PSIMPLE_SET set = (PSIMPLE_SET)calloc(1, sizeof(SIMPLE_SET));
+    if (set == nullptr)
+        return nullptr;
+    set->UniSet     = (int8_t *)calloc(maxSize, sizeof(int8_t));
+    set->UniSetSize = maxSize;
+    set->CurUniCnt  = 0;
+    return set;
+}
+
+static void SimpleRank(int8_t *data, uint32_t cnt, int up) {
+    if (up) {
+        for (uint32_t i = 0; i < cnt; i++) {
+            for (uint32_t j = i + 1; j < cnt; j++) {
+                if (data[i] > data[j]) {
+                    int8_t tmp = data[i];
+                    data[i]    = data[j];
+                    data[j]    = tmp;
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < cnt; i++) {
+            for (uint32_t j = i + 1; j < cnt; j++) {
+                if (data[i] < data[j]) {
+                    int8_t tmp = data[i];
+                    data[i]    = data[j];
+                    data[j]    = tmp;
+                }
+            }
+        }
+    }
+}
+
+static void InsertSimpleSet(PSIMPLE_SET set, int8_t value) {
+    if (set->CurUniCnt >= set->UniSetSize)
+        return;
+    for (uint32_t i = 0; i < set->CurUniCnt; i++) {
+        if (set->UniSet[i] == value)
+            return;
+    }
+    set->UniSet[set->CurUniCnt++] = value;
+    //    SimpleRank(set->UniSet, set->CurUniCnt, 1);
+}
+
+void DestorySimpleSet(PSIMPLE_SET set) {
+    if (set->UniSet != nullptr)
+        free(set->UniSet);
+    free(set);
+}
+
+typedef struct _SIMPLE_MAP {
+    int8_t *CharCharMap;
+    uint32_t CharMapSize;
+    uint32_t CurMapCnt;
+} SIMPLE_MAP, *PSIMPLE_MAP;
+
+static PSIMPLE_MAP CreateSimpleMap(uint32_t MaxCnt) {
+    PSIMPLE_MAP map = (PSIMPLE_MAP)calloc(1, sizeof(SIMPLE_MAP));
+    if (map == nullptr)
+        return nullptr;
+    map->CharMapSize = MaxCnt * sizeof(int8_t);
+    map->CurMapCnt   = 0;
+    map->CharCharMap = (int8_t *)calloc(1, MaxCnt * 2);
+    return map;
+}
+
+static void DestroySimpleMap(PSIMPLE_MAP map) {
+    if (map->CharCharMap)
+        free(map->CharCharMap);
+    free(map);
+}
+
+static void InsertMap(PSIMPLE_MAP map, int8_t k, int8_t v) {
+    for (uint32_t i = 0; i < map->CurMapCnt; i++) {
+        if (map->CharCharMap[i * 2] == k) {
+            map->CharCharMap[i * 2 + 1] = v;
+            return;
+        }
+    }
+    if (map->CurMapCnt >= map->CharMapSize)
+        return;
+    map->CharCharMap[map->CurMapCnt * 2]     = k;
+    map->CharCharMap[map->CurMapCnt * 2 + 1] = v;
+    map->CurMapCnt++;
+}
+
+static int8_t FindInMap(PSIMPLE_MAP map, int8_t k, int *found) {
+    for (uint32_t i = 0; i < map->CurMapCnt; i++) {
+        if (map->CharCharMap[i * 2] == k) {
+            if (found != nullptr)
+                *found = 1;
+            return map->CharCharMap[i * 2 + 1];
+        }
+    }
+    if (found != nullptr)
+        *found = 0;
+    return 0;
+}
+
+static void StreamSizeRead(void *dst, int unit, size_t count, unsigned char *&file) {
+    ::memcpy(dst, file, unit * count);
+    file += (unit * count);
+}
+
+static bool isLinearSample(const std::vector<int8_t>& sample, int bit) {
+    const int offset = 1 << (bit - 1);
+    const int size = 1 << bit;
+    if (sample.size() != size) {
+        return false;
+    }
+    for (int i = 0; i < sample.size(); i++) {
+        if (static_cast<int>(sample[i]) != i - offset) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+static int8_t *ReadQuanData_c(unsigned char *&s, size_t* len, ConvolutionCommon::Int8Common* result, bool shapeInt32) {
+    int8_t *blob      = nullptr;
+    uint8_t *idxBuf   = nullptr;
+    uint8_t *idxBytes = nullptr;
+    uint32_t dataCnt  = 1;
+
+    do {
+        // blob shape
+        unsigned int shape[32] = {0};
+        uint32_t shapeDim        = (uint32_t)ReadBlobDim(s, shape, 32, shapeInt32);
+        if (shapeDim == 0 || shapeDim > 32)
+            break;
+        for (uint32_t i = 0; i < shapeDim; i++)
+            dataCnt *= shape[i];
+
+        // sample
+        uint32_t sampleCnt = 0;
+        StreamSizeRead(&sampleCnt, 1, 1, s);
+        if (sampleCnt == 0) {
+            sampleCnt = 256;
+        }
+        result->weightMap.resize(sampleCnt);
+        auto samples = result->weightMap.data();
+        if (samples == nullptr)
+            break;
+        StreamSizeRead(samples, 1, sampleCnt, s);
+        SimpleRank(samples, sampleCnt, 1);
+        uint32_t idxBitsCnt = atLestBitsCnt(sampleCnt);
+        idxBitsCnt = idxBitsCnt < 1 ? 1 : idxBitsCnt;
+        // index
+        size_t idxBufSize   = ceil(idxBitsCnt * dataCnt * 0.125);
+        idxBuf              = (uint8_t *)MNNMemoryAllocAlignZeroAlign(idxBufSize);
+        if (nullptr == idxBuf) {
+            MNN_ERROR("Not enought memory\n");
+            break;
+        }
+        StreamSizeRead(idxBuf, 1, idxBufSize, s);
+        blob  = (int8_t *)MNNMemoryAllocAlignZeroAlign((size_t)dataCnt);
+        if (nullptr == blob) {
+            break;
+        }
+
+        if (isLinearSample(result->weightMap, idxBitsCnt) && (idxBitsCnt == 4 || idxBitsCnt == 8)) {
+            // fast sample for bit = 4 or 8
+            if (idxBitsCnt == 4) {
+                for (int i = 0; i < idxBufSize; i++) {
+                    int val = idxBuf[i];
+                    int x1 = val / 16;
+                    int x2 = val % 16;
+                    blob[2 * i] = x1 - 8;
+                    blob[2 * i + 1] = x2 - 8;
+                }
+            }
+            if (idxBitsCnt == 8) {
+                for (int i = 0; i < idxBufSize; i++) {
+                    int val = idxBuf[i];
+                    blob[i] = val - 64;
+                }
+            }
+        } else {
+            // split index value into bytes
+            idxBytes = (uint8_t *)MNNMemoryAllocAlignZeroAlign(dataCnt * sizeof(uint8_t));
+            if (idxBitsCnt == 0 || nullptr == idxBytes) {
+                break;
+            }
+            SplitBufToArray(idxBuf, (uint32_t)idxBufSize, idxBytes, (uint32_t)dataCnt, (uint32_t)idxBitsCnt);
+            int i = 0;
+            for (; i < dataCnt; i++) {
+                if (idxBytes[i] >= sampleCnt) {
+                    MNN_PRINT("iNeedBits is %u\nRead quan weights error with idx:%d\n", idxBitsCnt, (int)idxBytes[i]);
+                    break;
+                }
+                blob[i] = samples[idxBytes[i]];
+            }
+
+            if (i < dataCnt) {
+                MNNMemoryFreeAlign(blob);
+                blob = nullptr;
+                break;
+            }
+            MNNMemoryFreeAlign(idxBytes);
+            idxBytes = nullptr;
+        }
+    } while (0);
+
+    if (idxBuf != nullptr)
+        MNNMemoryFreeAlign(idxBuf);
+    if (idxBytes != nullptr)
+        MNNMemoryFreeAlign(idxBytes);
+    if (len)
+        *len = blob ? dataCnt : 0;
+    return blob;
+}
+
+static int8_t *ReadSparseQuanData_c(unsigned char *&myfile, size_t* len, const float* alpha_ptr, size_t alpha_size, ConvolutionCommon::Int8Common* result, bool useInt32) {    // MNN_ERROR("sparse:%d\n", 1);
+    unsigned int shape[32];
+    uint32_t ucMapSize = 0;
+    PSIMPLE_SET setWeight = CreateSimpleSet(256);
+    if (setWeight == nullptr) {
+        return nullptr;
+    }
+    std::shared_ptr<unsigned int> __autoReleaseSetWeight(nullptr, [setWeight](void *) { DestorySimpleSet(setWeight); });
+    unsigned int nnz;
+    unsigned char iIdxNeedBits;
+    int8_t *blob = nullptr;
+    // 1. weights blob shape(unsigned int32)
+    int ShapeDim = ReadBlobDim(myfile, shape, 32, useInt32);
+    size_t Size     = sizeof(int8_t);
+    for (int i = 0; i < ShapeDim; i++)
+        Size *= shape[i];
+    blob = (int8_t *)MNNMemoryAllocAlignZeroAlign((size_t)Size);
+    if (blob == nullptr)
+        return nullptr;
+    // 2. nnz
+    StreamSizeRead(&nnz, 4, 1, myfile);
+    // 3. max_step use # bits () (unsigned char)
+    StreamSizeRead(&iIdxNeedBits, 1, 1, myfile);
+    // read idx array
+    // 4. buf for steps ceil(nnz*step need bits/8)
+    AutoStorage<unsigned char> arrIdxBuffer(nnz);
+    unsigned char *arrIdx = arrIdxBuffer.get();
+    if (nullptr == arrIdx) {
+        return nullptr;
+    }
+    {
+        size_t bufLen = (size_t)(ceil(0.125 * iIdxNeedBits * nnz));
+        char *buf     = (char *)MNNMemoryAllocAlignZeroAlign(bufLen * sizeof(char));
+        if (nullptr == buf) {
+            return nullptr;
+        }
+        StreamSizeRead(buf, 1, bufLen, myfile);
+        SplitBufToArray((uint8_t *)buf, (uint32_t)bufLen, (uint8_t *)arrIdx, (uint32_t)nnz, (uint32_t)iIdxNeedBits);
+        MNNMemoryFreeAlign(buf);
+    }
+    // 5. Avalable values Count(unsigned char)
+    StreamSizeRead(&ucMapSize, 1, 1, myfile);
+    if (0 == ucMapSize) {
+        ucMapSize = 256;
+    }
+    result->weightMap.resize(ucMapSize);
+    // 6. valueset(signed char * valueset_size)
+    for (int i = 0; i < ucMapSize; i++) {
+        int8_t tmp;
+        StreamSizeRead(&tmp, 1, 1, myfile);
+        InsertSimpleSet(setWeight, tmp);
+        result->weightMap[i] = tmp;
+    }
+    SimpleRank(setWeight->UniSet, setWeight->CurUniCnt, 1);
+    // map<unsigned char, signed char> mapWeight;
+    PSIMPLE_MAP mapWeight = CreateSimpleMap(256);
+    if (mapWeight == nullptr) {
+        return nullptr;
+    }
+    std::shared_ptr<unsigned int> __autoReleaseMapWeight(nullptr, [mapWeight](void *) { DestroySimpleMap(mapWeight); });
+
+    for (int i = 0; i < setWeight->CurUniCnt; i++) {
+        InsertMap(mapWeight, i, setWeight->UniSet[i]);
+    }
+    //    unsigned char iIdx = 0;
+    // 7. none zero weights indexes(nnz*ceil(log2(Avalable_values_Count))/8)
+    AutoStorage<unsigned char> arrWeightIdxBuffer(nnz);
+    unsigned char *arrWeightIdx = arrWeightIdxBuffer.get();
+    if (nullptr == arrWeightIdx) {
+        return nullptr;
+    }
+    int iDataNeedBits = (int)ceil(_log2(ucMapSize));
+    iDataNeedBits = iDataNeedBits < 1 ? 1 : iDataNeedBits;
+    {
+        size_t bufLen     = (size_t)(ceil(0.125 * iDataNeedBits * nnz));
+        char *buf         = (char *)MNNMemoryAllocAlignZeroAlign(bufLen * sizeof(char));
+        if (nullptr == buf) {
+            return nullptr;
+        }
+        StreamSizeRead(buf, 1, bufLen, myfile);
+        SplitBufToArray((uint8_t *)buf, (uint32_t)bufLen, (uint8_t *)arrWeightIdx, (uint32_t)nnz,
+                        (uint32_t)iDataNeedBits);
+        MNNMemoryFreeAlign(buf);
+    }
+    // set blob data with idx and weight idx
+    {
+        if (alpha_size == 2 * shape[0]) {
+            const int min_value = -(1 << (iDataNeedBits - 1));
+            auto alphaPtr = alpha_ptr;
+            int area = Size / shape[0];
+            for (int i = 0; i < shape[0]; i++) {
+                float min = alphaPtr[2*i];
+                float scale = alphaPtr[2*i+1];
+                int zeroQuant = min_value;
+                if (scale > 1e-6) {
+                    zeroQuant = round((0.0f - min) / scale) + min_value;
+                }
+                memset(blob+area*i, zeroQuant, area * sizeof(signed char));
+            }
+        } else {
+            memset(blob, 0, Size * sizeof(signed char)); //backward compability with previous symmetric weight quant
+        }
+        int iPreIdx = 0;
+        for (int i = 0; i < nnz; i++) {
+            iPreIdx += arrIdx[i];
+            int found    = 0;
+            int8_t value = FindInMap(mapWeight, arrWeightIdx[i], &found);
+            if (!found) {
+                MNN_ERROR("Read quan weights error with idx:%d\n", arrWeightIdx[i]);
+                MNNMemoryFreeAlign(blob);
+                return nullptr;
+            }
+            blob[iPreIdx] = value;
+        }
+    }
+    *len = Size;
+    return blob;
+}
+
+Calibration::Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
+    : _originalModel(model), _halfModel(halfModel), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
     // when the format of input image is RGB/BGR, channels equal to 3, GRAY is 1
     _channels = 3;
 
@@ -668,6 +1074,82 @@ void Calibration::_fake_quant_weights() {
     DLOG(INFO) << "fake quant weights done.";
 }
 
+
+float CosineSimilarity(const std::vector<float>& a, const std::vector<float>& b) {
+    float dot = 0.0, denom_a = 0.0, denom_b = 0.0;
+    for (size_t i = 0; i < a.size(); i++) {
+        dot += a[i] * b[i];
+        denom_a += a[i] * a[i];
+        denom_b += b[i] * b[i];
+    }
+    return dot / (sqrt(denom_a) * sqrt(denom_b));
+}
+
+void Calibration::_fake_invert_quant_weights() {
+    int n = _originalModel->oplists.size();
+
+    for (int i = 0; i < n; i++) {
+        const auto& op = _originalModel->oplists[i];
+        auto& opHalf = _halfModel->oplists[i];
+        std::vector<std::string>::iterator iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opHalf->name);
+        if (iter != _skip_quant_ops.end()) {
+            continue;
+        }
+
+        const auto opType = opHalf->type;
+        if (opType != MNN::OpType_Convolution && opType != MNN::OpType_ConvolutionDepthwise) {
+            continue;
+        }
+
+        auto param = op->main.AsConvolution2D();
+        auto& quantizedWeights = param->quanParameter->buffer;
+        const int channel = param->common->outputCount;
+        const auto& scales = param->quanParameter->alpha;
+        const auto type = param->quanParameter->type;
+        auto common = std::make_shared<MNN::ConvolutionCommon::Int8Common>();
+        auto originBuffer = (unsigned char*) quantizedWeights.data();
+        int8_t *buffer = nullptr;
+        size_t bufferSzie = 0;
+        if (type == 1) {
+            buffer = ReadQuanData_c(originBuffer, &bufferSzie, common.get(), param->quanParameter->shapeInt32);
+        } else if (type == 2) {
+            buffer = ReadSparseQuanData_c(originBuffer, &bufferSzie, scales.data(), scales.size(), common.get(), param->quanParameter->shapeInt32);
+        } else if (type == 4) {
+            buffer = quantizedWeights.data();
+            bufferSzie = quantizedWeights.size();
+        }
+
+        auto paramHalf = opHalf->main.AsConvolution2D();
+        std::vector<half_float::half> halfWeights(bufferSzie);
+        const int featSize = bufferSzie / channel;
+        // invert quant weights
+        for (int i = 0; i < channel; i++) {
+            std::transform(buffer + i * featSize, 
+                            buffer + (i + 1) * featSize, 
+                            halfWeights.begin() + i * featSize, 
+                            [&](int8_t x) { return half_float::half(x * scales[i]); });
+        }
+
+        paramHalf->quanParameter.reset(new MNN::IDSTQuanT);
+        paramHalf->quanParameter->type = 3;
+        int8_t* halfWeightsPtr = reinterpret_cast<int8_t*>(halfWeights.data());
+        paramHalf->quanParameter->buffer.assign(halfWeightsPtr, halfWeightsPtr + bufferSzie * sizeof(half_float::half));
+        std::vector<float> quantizedWeightsFloat(bufferSzie);
+        std::transform(halfWeights.begin(), halfWeights.end(), quantizedWeightsFloat.begin(), 
+                       [](half_float::half x) { return static_cast<float>(x); });
+        
+        float sim = CosineSimilarity(quantizedWeightsFloat, paramHalf->weight);
+        auto name = opHalf->name;
+        if (quantizedWeightsFloat.size() != paramHalf->weight.size()) {
+            MNN_PRINT("op name: %s, weight size not match\n", name.c_str());
+        }
+        MNN_PRINT("op name: %s, weight cosine similarity: %f\n", name.c_str(), sim);
+
+        paramHalf->weight.clear();
+    }
+    DLOG(INFO) << "fake invert quant weights done.";
+}
+
 void Calibration::_insertScale() {
     for (const auto iter :  _scales) {
         std::unique_ptr<MNN::TensorDescribeT> describe(new MNN::TensorDescribeT);
@@ -962,6 +1444,240 @@ void Calibration::_quantizeModelEMA() {
     }
     Variable::save(predicts, _destModelFile.c_str());
     ConvertToFullQuant::convert(_destModelFile);
+    
+    std::unique_ptr<MNN::NetT> netT;
+    {
+        std::ifstream input(_destModelFile, std::ifstream::in | std::ifstream::binary);
+        std::ostringstream outputOs;
+        outputOs << input.rdbuf();
+        netT = MNN::UnPackNet(outputOs.str().c_str());
+    }
+    ComputeUnaryBuffer(netT.get());
+    {
+        flatbuffers::FlatBufferBuilder builderOutput(1024);
+        builderOutput.ForceDefaults(true);
+        auto len = MNN::Net::Pack(builderOutput, netT.get());
+        builderOutput.Finish(len);
+        std::ofstream output(_destModelFile, std::ofstream::binary);
+        output.write((const char*)builderOutput.GetBufferPointer(), builderOutput.GetSize());
+    }
+}
+
+void Calibration::_computeInvertQuantError() {
+    {
+        flatbuffers::FlatBufferBuilder builderOutput(1024);
+        builderOutput.ForceDefaults(true);
+        auto len = MNN::Net::Pack(builderOutput, _halfModel);
+        builderOutput.Finish(len);
+        _interpreterHalf.reset(MNN::Interpreter::createFromBuffer(builderOutput.GetBufferPointer(), builderOutput.GetSize()), MNN::Interpreter::destroy);
+    }
+    MNN::ScheduleConfig config;
+    // when using opencl as backend, the execution graph will be different from cpu
+    // config.type = MNN_FORWARD_OPENCL;
+    config.type = MNN_FORWARD_CPU;
+    MNN::BackendConfig backendConfig;
+    backendConfig.precision = MNN::BackendConfig::Precision_Low;
+    _sessionHalf = _interpreterHalf->createSession(config);
+    _inputTensorHalf = _interpreterHalf->getSessionInput(_sessionHalf, NULL);
+    _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
+    _interpreterHalf->resizeSession(_sessionHalf);
+
+    // init _featureInfoHalf
+    MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        auto opName = info->name();
+        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        if (iter != _skip_quant_ops.end()) {
+            return false;
+        }
+        if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
+            int i = 0;
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
+                        new TensorStatistic(t, _featureQuantizeMethod, opName + " input_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                }
+                i++;
+            }
+        }
+        return true;
+    };
+    MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        auto opName = info->name();
+        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        if (iter != _skip_quant_ops.end()) {
+            return false;
+        }
+        if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
+            int i = 0;
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
+                        new TensorStatistic(t, _featureQuantizeMethod, opName + " output_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                }
+                i++;
+            }
+        }
+        return true;
+    };
+    _interpreterHalf->runSessionWithCallBackInfo(_sessionHalf, before, after);
+
+    int count = 0;
+    std::map<std::string, std::vector<float>> overflowRatiosMap;
+    std::map<std::string, std::vector<float>> tensorCosDistanceMap;
+    std::map<std::string, std::vector<float>> tensorCosDistanceMapHalf;
+
+    for (const auto& file : _calibrationFiles) {
+        count++;
+        _resizeIfNeeded(file, true);
+        _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
+        _interpreterHalf->resizeSession(_sessionHalf);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensor, _inputType);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensorHalf, _inputType);
+        Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensorOrigin, _inputType);
+
+        std::map<std::string, std::vector<float>> fakeQuantedFeatures;
+        std::map<std::string, std::vector<float>> fakeHalfFeatures;
+
+        MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfo.find(t) != _featureInfo.end()) {
+                    if (_featureInfo[t]->visited() == false) {
+                        auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
+                        fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
+                        overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfo.find(t) != _featureInfo.end()) {
+                    if (_featureInfo[t]->visited() == false) {
+                        auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
+                        fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
+                        overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
+                    }
+                }
+            }
+            return true;
+        };
+
+        for (auto& iter : _featureInfo) {
+            iter.second->setVisited(false);
+        }
+        _interpreter->runSessionWithCallBackInfo(_session, before, after);
+
+        MNN::TensorCallBackWithInfo beforeHalf =  [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) != _featureInfoHalf.end()) {
+                    if (_featureInfoHalf[t]->visited() == false) {
+                        auto *ptr = t->host<float>();
+                        fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
+                        _featureInfoHalf[t]->setVisited(true);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo afterHalf = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfoHalf.find(t) != _featureInfoHalf.end()) {
+                    if (_featureInfoHalf[t]->visited() == false) {
+                        auto *ptr = t->host<float>();
+                        fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
+                        _featureInfoHalf[t]->setVisited(true);
+                    }
+                }
+            }
+            return true;
+        }; 
+        
+        for (auto& iter : _featureInfoHalf) {
+            iter.second->setVisited(false);
+        }
+        _interpreterHalf->runSessionWithCallBackInfo(_sessionHalf, beforeHalf, afterHalf);
+
+        MNN::TensorCallBackWithInfo beforeOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                 const MNN::OperatorInfo* info) {
+            if (info->type() == "Raster") {
+                return true;
+            }
+            for (auto t : nTensors) {
+                if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                    if (_featureInfoOrigin[t]->visited() == false) {
+                        auto& info = _featureInfoOrigin[t];
+                        auto name = _featureInfoOrigin[t]->name();
+                        auto feature = fakeQuantedFeatures[name];
+                        float cosDis = _featureInfoOrigin[t]->computeDistance(feature);
+                        tensorCosDistanceMap[name].emplace_back(cosDis);
+
+                        auto halfFeature = fakeHalfFeatures[name];
+                        float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
+                        tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
+                    }
+                }
+            }
+            return true;
+        };
+        MNN::TensorCallBackWithInfo afterOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+            for (auto t : nTensors) {
+                if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                    if (_featureInfoOrigin[t]->visited() == false) {
+                        auto name = _featureInfoOrigin[t]->name();
+                        auto feature = fakeQuantedFeatures[name];
+                        float cosDis = _featureInfoOrigin[t]->computeDistance(feature);
+                        tensorCosDistanceMap[name].emplace_back(cosDis);
+
+                        auto halfFeature = fakeHalfFeatures[name];
+                        float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
+                        tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
+                    }
+                }
+            }
+            return true;
+        };
+
+        for (auto& iter : _featureInfoOrigin) {
+            iter.second->setVisited(false);
+        }
+        _interpreterOrigin->runSessionWithCallBackInfo(_sessionOrigin, beforeOrigin, afterOrigin);
+
+        MNN_PRINT("\rcomputeDistance: %.2lf %%", (float)count * 100.0f / (float)_calibrationFileNum);
+        fflush(stdout);
+    }
+    MNN_PRINT("\n\nDebug info:\n\n");
+
+    for (auto& iter : tensorCosDistanceMap) {
+        auto name = iter.first;
+        float sumCos = 0.0f, sumOverflow = 0.0f;
+        for (int i = 0; i < iter.second.size(); i++) {
+            sumCos += iter.second[i];
+            sumOverflow += overflowRatiosMap[name][i];
+        }
+        float avgCosDistance = sumCos / _calibrationFiles.size();
+        float avgOverflowRatio = sumOverflow / _calibrationFiles.size();
+
+        float sumCosHalf = 0.0f;
+        for (int i = 0; i < tensorCosDistanceMapHalf[name].size(); i++) {
+            sumCosHalf += tensorCosDistanceMapHalf[name][i];
+        }
+        float avgCosDistanceHalf = sumCosHalf / _calibrationFiles.size();
+
+        MNN_PRINT("int8 %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
+                    name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
+    }
 }
 
 void Calibration::runQuantizeModel() {
