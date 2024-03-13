@@ -447,6 +447,73 @@ static int8_t *ReadSparseQuanData_c(unsigned char *&myfile, size_t* len, const f
     return blob;
 }
 
+#define DUMP_NUM_DATA(type)                          \
+    auto data = tensor->host<type>();                \
+    for (int z = 0; z < outside; ++z) {              \
+        for (int x = 0; x < width; ++x) {            \
+            outputOs << data[x + z * width] << "\t"; \
+        }                                            \
+        outputOs << "\n";                            \
+    }
+
+#define DUMP_CHAR_DATA(type)                                           \
+    auto data = tensor->host<type>();                                  \
+    for (int z = 0; z < outside; ++z) {                                \
+        for (int x = 0; x < width; ++x) {                              \
+            outputOs << static_cast<int>(data[x + z * width]) << "\t"; \
+        }                                                              \
+        outputOs << "\n";                                              \
+    }
+
+
+static void dumpTensor2File(const Tensor* tensor, const std::string& name) {
+    auto opCopyName = name;
+    for (int j = 0; j < opCopyName.size(); ++j) {
+        if (opCopyName[j] == '/') {
+            opCopyName[j] = '_';
+        }
+    }
+
+    std::ofstream outputOs(opCopyName);
+    auto type = tensor->getType();
+
+    int dimension = tensor->buffer().dimensions;
+    int width     = 1;
+    if (dimension > 1) {
+        width = tensor->length(dimension - 1);
+    }
+
+    const int outside = tensor->elementSize() / width;
+
+    const auto dataType  = type.code;
+    const auto dataBytes = type.bytes();
+
+    if (dataType == halide_type_float) {
+        DUMP_NUM_DATA(float);
+    }
+    if (dataType == halide_type_int && dataBytes == 4) {
+        DUMP_NUM_DATA(int32_t);
+    }
+    if (dataType == halide_type_uint && dataBytes == 1) {
+        DUMP_CHAR_DATA(uint8_t);
+    }
+    if (dataType == halide_type_int && dataBytes == 1) {
+#ifdef MNN_USE_SSE
+        auto data = tensor->host<uint8_t>();
+        for (int z = 0; z < outside; ++z) {
+            for (int x = 0; x < width; ++x) {
+                outputOs << (static_cast<int>(data[x + z * width]) - 128) << "\t";
+            }
+            outputOs << "\n";
+        }
+#else
+        DUMP_CHAR_DATA(int8_t);
+#endif
+    }
+}
+
+
+
 Calibration::Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
     : _originalModel(model), _halfModel(halfModel), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
     // when the format of input image is RGB/BGR, channels equal to 3, GRAY is 1
@@ -714,6 +781,10 @@ void Calibration::_resizeIfNeeded(std::string filename, bool force) {
 void Calibration::_initMNNSession(const uint8_t* modelBuffer, const int bufferSize) {
     _interpreterOrigin.reset(MNN::Interpreter::createFromBuffer(modelBuffer, bufferSize));
     MNN::ScheduleConfig config;
+    // 如果是以debug模式编译，则线程数为1
+#ifdef DEBUG
+    config.numThread = 1;
+#endif
     _sessionOrigin     = _interpreterOrigin->createSession(config);
     _inputTensorOrigin = _interpreterOrigin->getSessionInput(_sessionOrigin, NULL);
 
@@ -1482,10 +1553,15 @@ void Calibration::_computeInvertQuantError() {
     _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
     _interpreterHalf->resizeSession(_sessionHalf);
 
+    std::ostringstream opOrderStream;
+    std::map<std::string, std::string> nameToOpName;
     // init _featureInfoHalf
     MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
         auto opName = info->name();
+        auto type = info->type();
         auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        opOrderStream << opName << "\n";
+
         if (iter != _skip_quant_ops.end()) {
             return false;
         }
@@ -1493,8 +1569,10 @@ void Calibration::_computeInvertQuantError() {
             int i = 0;
             for (auto t : nTensors) {
                 if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    auto name = opName + " input_tensor_" + flatbuffers::NumToString(i);
                     _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
-                        new TensorStatistic(t, _featureQuantizeMethod, opName + " input_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                        new TensorStatistic(t, _featureQuantizeMethod, name, _featureClampValue));
+                    nameToOpName[name] = type;
                 }
                 i++;
             }
@@ -1503,6 +1581,7 @@ void Calibration::_computeInvertQuantError() {
     };
     MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
         auto opName = info->name();
+        auto type = info->type();
         auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
         if (iter != _skip_quant_ops.end()) {
             return false;
@@ -1511,8 +1590,10 @@ void Calibration::_computeInvertQuantError() {
             int i = 0;
             for (auto t : nTensors) {
                 if (_featureInfoHalf.find(t) == _featureInfoHalf.end()) {
+                    auto name = opName + " output_tensor_" + flatbuffers::NumToString(i);
                     _featureInfoHalf[t] = std::shared_ptr<TensorStatistic>(
-                        new TensorStatistic(t, _featureQuantizeMethod, opName + " output_tensor_" + flatbuffers::NumToString(i), _featureClampValue));
+                        new TensorStatistic(t, _featureQuantizeMethod, name, _featureClampValue));
+                    nameToOpName[name] = type;
                 }
                 i++;
             }
@@ -1525,6 +1606,14 @@ void Calibration::_computeInvertQuantError() {
     std::map<std::string, std::vector<float>> overflowRatiosMap;
     std::map<std::string, std::vector<float>> tensorCosDistanceMap;
     std::map<std::string, std::vector<float>> tensorCosDistanceMapHalf;
+
+    {
+        auto opOrder = opOrderStream.str();
+        std::ofstream opOrderFile("op_order.txt");
+        opOrderFile << opOrder;
+    }
+    std::string swinTestOpName = "/features/features.1/features.1.0/attn/Add_2_output_0__matmul_converted";
+    bool dump = false;
 
     for (const auto& file : _calibrationFiles) {
         count++;
@@ -1551,6 +1640,11 @@ void Calibration::_computeInvertQuantError() {
                         overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
                     }
                 }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
+                }
             }
             return true;
         };
@@ -1563,6 +1657,11 @@ void Calibration::_computeInvertQuantError() {
                         fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
                         overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
                     }
+                }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
                 }
             }
             return true;
@@ -1586,6 +1685,11 @@ void Calibration::_computeInvertQuantError() {
                         _featureInfoHalf[t]->setVisited(true);
                     }
                 }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
+                }
             }
             return true;
         };
@@ -1598,6 +1702,11 @@ void Calibration::_computeInvertQuantError() {
                         fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
                         _featureInfoHalf[t]->setVisited(true);
                     }
+                }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
                 }
             }
             return true;
@@ -1627,6 +1736,11 @@ void Calibration::_computeInvertQuantError() {
                         tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
                     }
                 }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
+                }
             }
             return true;
         };
@@ -1644,6 +1758,11 @@ void Calibration::_computeInvertQuantError() {
                         float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
                         tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
                     }
+                }
+
+                if (swinTestOpName == info->name() && dump) {
+                    std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
+                    dumpTensor2File(t, filename.c_str());
                 }
             }
             return true;
@@ -1675,8 +1794,8 @@ void Calibration::_computeInvertQuantError() {
         }
         float avgCosDistanceHalf = sumCosHalf / _calibrationFiles.size();
 
-        MNN_PRINT("int8 %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
-                    name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
+        MNN_PRINT("int8 %s %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
+                    nameToOpName[name].c_str(), name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
     }
 }
 
