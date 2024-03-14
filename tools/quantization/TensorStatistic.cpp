@@ -317,6 +317,9 @@ std::pair<std::vector<float>, float> TensorStatistic::fakeQuantFeature() {
 float TensorStatistic::computeDistance(std::vector<float> fakeQuantedFeature) {
     const int count         = mOriginTensor->elementSize();
     CHECK_EQ(count, fakeQuantedFeature.size()) << "feature size error";
+    if (n != count) {
+        return 0.0f;
+    }
     const float bound       = mFeatureClampValue;
     float* originData = mOriginTensor->host<float>();
     float axbSum = 0.0f;

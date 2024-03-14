@@ -31,7 +31,12 @@ public:
     void runQuantizeModel();
     
     void dumpTensorScales(const std::string& modelFile);
+    void ComputeUnaryBuffer(MNN::NetT* net);
+    bool valid() const {
+        return mValid;
+    }
 
+    void hybridQuantModel();
 private:
     Calibration();
     MNN::NetT* _originalModel;
@@ -51,6 +56,7 @@ private:
     std::string _destModelFile;
     MNN::CV::ImageProcess::Config _imageProcessConfig;
     std::vector<std::string> _calibrationFiles;
+    float mSimThreshold = 0.9f;
 
     // Tensor and Info
     std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfo;
