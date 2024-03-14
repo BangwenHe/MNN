@@ -784,6 +784,9 @@ void Calibration::_resizeIfNeeded(std::string filename, bool force) {
 void Calibration::_initMNNSession(const uint8_t* modelBuffer, const int bufferSize) {
     _interpreterOrigin.reset(MNN::Interpreter::createFromBuffer(modelBuffer, bufferSize), MNN::Interpreter::destroy);
     MNN::ScheduleConfig config;
+    MNN::BackendConfig backendConfig;
+    backendConfig.memory = MNN::BackendConfig::Memory_High;
+    config.backendConfig = &backendConfig;
     // 如果是以debug模式编译，则线程数为1
 #ifdef DEBUG
     config.numThread = 1;
@@ -844,7 +847,7 @@ void Calibration::_initMaps() {
         for (auto t : nTensors) {
             auto des = TensorUtils::getDescribe(t);
             if (des->index >= 0) {
-                _tensorMap[des->index] = t;;
+                _tensorMap[des->index] = t;
             }
         }
         if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
@@ -869,7 +872,7 @@ void Calibration::_initMaps() {
         for (auto t : nTensors) {
             auto des = TensorUtils::getDescribe(t);
             if (des->index >= 0) {
-                _tensorMap[des->index] = t;;
+                _tensorMap[des->index] = t;
             }
         }
         if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
@@ -1584,12 +1587,12 @@ void Calibration::_computeInvertQuantError() {
     MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
         auto opName = info->name();
         auto type = info->type();
-        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        // auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
         opOrderStream << opName << "\n";
 
-        if (iter != _skip_quant_ops.end()) {
-            return false;
-        }
+        // if (iter != _skip_quant_ops.end()) {
+        //     return false;
+        // }
         if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
             int i = 0;
             for (auto t : nTensors) {
@@ -1607,10 +1610,10 @@ void Calibration::_computeInvertQuantError() {
     MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
         auto opName = info->name();
         auto type = info->type();
-        auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
-        if (iter != _skip_quant_ops.end()) {
-            return false;
-        }
+        // auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
+        // if (iter != _skip_quant_ops.end()) {
+        //     return false;
+        // }
         if (Helper::gNotNeedFeatureOp.find(info->type()) == Helper::gNotNeedFeatureOp.end()) {
             int i = 0;
             for (auto t : nTensors) {
@@ -1822,6 +1825,8 @@ void Calibration::_computeInvertQuantError() {
         MNN_PRINT("int8 %s %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
                     nameToOpName[name].c_str(), name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
     }
+
+    hybridQuantModel();
 }
 
 void Calibration::runQuantizeModel() {
@@ -1854,6 +1859,120 @@ void Calibration::runQuantizeModel() {
         builderOutput.Finish(len);
         std::ofstream output(_destModelFile, std::ofstream::binary);
         output.write((const char*)builderOutput.GetBufferPointer(), builderOutput.GetSize());
+    }
+}
+
+void Calibration::hybridQuantModel() {
+    // 必须保存数据，因为tensor会复用内存，导致内存失效
+    std::map<std::string, std::vector<float>> tensorDataMap;
+    MNN::TensorCallBackWithInfo beforeOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                                const MNN::OperatorInfo* info) {
+        if (info->type() == "Raster") {
+            return true;
+        }
+        for (auto t : nTensors) {
+            if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                if (_featureInfoOrigin[t]->visited() == false) {
+                    auto& info = _featureInfoOrigin[t];
+                    auto name = _featureInfoOrigin[t]->name();
+                    auto* ptr = t->host<float>();
+                    std::vector<float> data(t->elementSize());
+                    memcpy(data.data(), ptr, t->size());
+                    tensorDataMap[name] = data;
+                    _featureInfoOrigin[t]->setVisited(true);
+                }
+            }
+        }
+        return true;
+    };
+    MNN::TensorCallBackWithInfo afterOrigin = [&](const std::vector<MNN::Tensor*>& nTensors,
+                                            const MNN::OperatorInfo* info) {
+        for (auto t : nTensors) {
+            if (_featureInfoOrigin.find(t) != _featureInfoOrigin.end()) {
+                if (_featureInfoOrigin[t]->visited() == false) {
+                    auto name = _featureInfoOrigin[t]->name();
+                    auto* ptr = t->host<float>();
+                    std::vector<float> data(t->elementSize());
+                    memcpy(data.data(), ptr, t->size());
+                    tensorDataMap[name] = data;
+                    _featureInfoOrigin[t]->setVisited(true);
+                }
+            }
+        }
+        return true;
+    };
+
+    std::set<std::string> skipOps;
+    MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        if (info->type() == "Raster") {
+            return true;
+        }
+        auto opType = info->type();
+        for (auto t : nTensors) {
+            if (_featureInfo.find(t) != _featureInfo.end()) {
+                if (_featureInfo[t]->visited() == false) {
+                    _featureInfo[t]->setVisited(true);
+                    auto name = _featureInfo[t]->name();
+                    auto feature = tensorDataMap[name];
+                    _featureInfo[t]->fakeQuantFeature();
+                    float sim = _featureInfo[t]->computeDistance(feature);
+
+                    if (sim < mSimThreshold) {
+                        skipOps.emplace(info->name());
+                        auto* ptr = t->host<float>();
+                        std::memcpy(ptr, feature.data(), t->size());
+                        MNN_PRINT("op %s tensor %s sim %f\n", opType.c_str(), _featureInfo[t]->name().c_str(), sim);
+                    }
+                }
+            }
+        }
+        return true;
+    };
+    MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
+        if (info->type() == "Raster") {
+            return true;
+        }
+        auto opType = info->type();
+        for (auto t : nTensors) {
+            if (_featureInfo.find(t) != _featureInfo.end()) {
+                if (_featureInfo[t]->visited() == false) {
+                    _featureInfo[t]->setVisited(true);
+                    auto name = _featureInfo[t]->name();
+                    auto feature = tensorDataMap[name];
+                    _featureInfo[t]->fakeQuantFeature();
+                    float sim = _featureInfo[t]->computeDistance(feature);
+
+                    if (sim < mSimThreshold) {
+                        skipOps.emplace(info->name());
+                        auto* ptr = t->host<float>();
+                        std::memcpy(ptr, feature.data(), t->size());
+                        MNN_PRINT("op %s tensor %s sim %f\n", opType.c_str(), _featureInfo[t]->name().c_str(), sim);
+                    }
+                }
+            }
+        }
+        return true;
+    };
+
+
+    MNN_PRINT("\n\nSTART HYBRID QUANTIZATION\n");
+    auto file = _calibrationFiles[0];
+    _resizeIfNeeded(file, true);
+    Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensor, _inputType);
+    Helper::preprocessInput(_process.get(), _preprocessConfig, file, _inputTensorOrigin, _inputType);
+    for (auto& iter : _featureInfoOrigin) {
+        iter.second->setVisited(false);
+    }
+    _interpreterOrigin->runSessionWithCallBackInfo(_sessionOrigin, beforeOrigin, afterOrigin);
+
+    for (auto& iter : _featureInfo) {
+        iter.second->setVisited(false);
+    }
+    _interpreter->runSessionWithCallBackInfo(_session, before, after);
+
+    MNN_PRINT("\n\nSKIP OPs\n");
+    for (auto& op : skipOps) {
+        MNN_PRINT("%s\n", op.c_str());
     }
 }
 
