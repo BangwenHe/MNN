@@ -48,6 +48,9 @@ list(APPEND MNN_CPP_TOOLS testTrain.out)
 add_executable(fuseTest ${CMAKE_CURRENT_LIST_DIR}/fuseTest.cpp)
 list(APPEND MNN_CPP_TOOLS fuseTest)
 
+add_executable(branchDetect ${CMAKE_CURRENT_LIST_DIR}/branchDetect.cpp)
+list(APPEND MNN_CPP_TOOLS branchDetect)
+
 foreach(TARGET ${MNN_CPP_TOOLS})
     target_link_libraries(${TARGET} ${MNN_DEPS})
     if (MSVC)
