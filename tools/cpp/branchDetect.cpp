@@ -43,9 +43,6 @@ int main(int argc, char* argv[]) {
     MNN_PRINT("modelFile: %s\n", modelFile.c_str());
     std::shared_ptr<MNN::Interpreter> net(MNN::Interpreter::createFromFile(modelFile.c_str()));
     net->setSessionMode(MNN::Interpreter::Session_Debug);
-    // std::shared_ptr<MNN::Interpreter> gpuNet(MNN::Interpreter::createFromFile(modelFile.c_str()));
-    // gpuNet->setSessionMode(MNN::Interpreter::Session_Debug);
-    // gpuNet->setSessionMode(MNN::Interpreter::Session_Debug);
 
     auto bufferAndLength = net->getModelBuffer();
     const void* buffer = bufferAndLength.first;
@@ -58,10 +55,6 @@ int main(int argc, char* argv[]) {
             inputOps.push_back(op.get());
         }
 
-        // auto findOutputFunc = [&op] (const std::string& outputName) {
-        //     return op->name.find(outputName) != std::string::npos;
-        // };
-        // if (std::find_if(netT->outputName.begin(), netT->outputName.end(), findOutputFunc) != netT->outputName.end()) {
         if (std::find(netT->outputName.begin(), netT->outputName.end(), op->name) != netT->outputName.end()) {
             outputOps.push_back(op.get());
         }
@@ -151,9 +144,6 @@ int main(int argc, char* argv[]) {
         gpuBranchIndex = 0;
     }
 
-    // auto* gpuSession = gpuNet->createSession(gpuConfig);
-    // auto gpuInputTensor = gpuNet->getSessionInput(gpuSession, nullptr);
-    // auto gpuOutputTensor = gpuNet->getSessionOutput(gpuSession, nullptr);
     auto* gpuSession = net->createSession(gpuConfig);
     auto gpuInputTensor = net->getSessionInput(gpuSession, nullptr);
     auto gpuOutputTensor = net->getSessionOutput(gpuSession, nullptr);
@@ -273,25 +263,24 @@ int main(int argc, char* argv[]) {
     };
 
     net->resizeSession(session);
-    // gpuNet->resizeSession(gpuSession);
     net->resizeSession(gpuSession);
 
     std::vector<uint64_t> times;
 
-    // MNN_PRINT("CPU single\n");
-    // for (int i = 0; i < rounds; i++) {
-    //     auto start = getTimeInUs();
-    //     net->runSessionWithCallBackInfo(session, before, after);
-    //     auto end = getTimeInUs();
-    //     times.push_back(end - start);
-    // }
-    // summarizeTime(times);
+    MNN_PRINT("CPU single\n");
+    for (int i = 0; i < rounds; i++) {
+        auto start = getTimeInUs();
+        net->runSessionWithCallBackInfo(session, before, after);
+        auto end = getTimeInUs();
+        times.push_back(end - start);
+    }
+    summarizeTime(times);
 
     MNN_PRINT("GPU single\n");
+    gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
     times.clear();
     for (int i = 0; i < rounds; i++) {
         auto start = getTimeInUs();
-        // gpuNet->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter, false);
         net->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter, false);
         gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
         auto end = getTimeInUs();
@@ -299,44 +288,46 @@ int main(int argc, char* argv[]) {
     }
     summarizeTime(times);
 
+    gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+    net->resizeSession(session);
+    net->resizeSession(gpuSession);
+
     MNN_PRINT("CPU-GPU Parallel\n");
     times.clear();
     for (int i = 0; i < rounds; i++) {
         auto start = getTimeInUs();
-        {
-            MNN::AutoTime _t(__LINE__, "GPU sche");
-            // gpuNet->runSessionWithCallBackInfoAsync(gpuSession, gpuBefore, gpuAfter, false);
+        // MARK: 之前 Interpreter 中有一个锁，async 的方式不能提交两个任务，如果 CPU 先拿到锁，GPU 任务会被阻塞
+        auto future = std::async(std::launch::async, [&] {
             net->runSessionWithCallBackInfoAsync(gpuSession, gpuBefore, gpuAfter, false);
-        }
-        {
-            MNN::AutoTime _t(__LINE__, "CPU comp");
-            net->runSessionWithCallBackInfo(session, before, after);
-        }
-        {
-            MNN::AutoTime _t(__LINE__, "GPU wait");
             gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
-        }
+        });
+
+        net->runSessionWithCallBackInfo(session, before, after);
+        future.wait();
+
         auto end = getTimeInUs();
         times.push_back(end - start);
-        MNN_PRINT("=====================================\n");
     }
     summarizeTime(times);
 
-    // MNN_PRINT("CPU single full\n");
-    // times.clear();
-    // for (int i = 0; i < rounds; i++) {
-    //     auto start = getTimeInUs();
-    //     net->runSession(session);
-    //     auto end = getTimeInUs();
-    //     times.push_back(end - start);
-    // }
-    // summarizeTime(times);
+    MNN_PRINT("CPU single full\n");
+    times.clear();
+    for (int i = 0; i < rounds; i++) {
+        auto start = getTimeInUs();
+        net->runSession(session);
+        auto end = getTimeInUs();
+        times.push_back(end - start);
+    }
+    summarizeTime(times);
+
+    gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+    net->resizeSession(session);
+    net->resizeSession(gpuSession);
 
     MNN_PRINT("GPU single full\n");
     times.clear();
     for (int i = 0; i < rounds; i++) {
         auto start = getTimeInUs();
-        // gpuNet->runSession(gpuSession);
         net->runSession(gpuSession);
         gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
         auto end = getTimeInUs();
