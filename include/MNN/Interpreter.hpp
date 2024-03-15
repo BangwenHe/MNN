@@ -322,6 +322,15 @@ public:
     ErrorCode runSessionWithCallBackInfo(const Session* session, const TensorCallBackWithInfo& before,
                                          const TensorCallBackWithInfo& end, bool sync = false) const;
 
+
+    /**
+    * @brief run session asynchronously.
+    * @param session   given session.
+    * @return result of running.
+    */
+    ErrorCode runSessionWithCallBackInfoAsync(const Session* session, const TensorCallBackWithInfo& before,
+                                         const TensorCallBackWithInfo& end, bool sync = false) const;
+
     /**
      * @brief get input tensor for given name.
      * @param session   given session.

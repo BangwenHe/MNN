@@ -7,13 +7,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
-#if defined(_MSC_VER)
-#include <Windows.h>
-#undef min
-#undef max
-#else
 #include <sys/time.h>
-#endif
 #include <MNN/MNNDefine.h>
 #include <MNN/AutoTime.hpp>
 #include <MNN/Interpreter.hpp>
@@ -21,6 +15,18 @@
 #include <core/Backend.hpp>
 #include <core/TensorUtils.hpp>
 #include <MNN_generated.h>
+#include <numeric>
+
+
+static inline int64_t getTimeInUs() {
+    uint64_t time;
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    time = static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
+    return time;
+}
+
+
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -34,7 +40,13 @@ int main(int argc, char* argv[]) {
         rounds = atoi(argv[2]);
     }
 
+    MNN_PRINT("modelFile: %s\n", modelFile.c_str());
     std::shared_ptr<MNN::Interpreter> net(MNN::Interpreter::createFromFile(modelFile.c_str()));
+    net->setSessionMode(MNN::Interpreter::Session_Debug);
+    // std::shared_ptr<MNN::Interpreter> gpuNet(MNN::Interpreter::createFromFile(modelFile.c_str()));
+    // gpuNet->setSessionMode(MNN::Interpreter::Session_Debug);
+    // gpuNet->setSessionMode(MNN::Interpreter::Session_Debug);
+
     auto bufferAndLength = net->getModelBuffer();
     const void* buffer = bufferAndLength.first;
     size_t length = bufferAndLength.second;
@@ -46,6 +58,10 @@ int main(int argc, char* argv[]) {
             inputOps.push_back(op.get());
         }
 
+        // auto findOutputFunc = [&op] (const std::string& outputName) {
+        //     return op->name.find(outputName) != std::string::npos;
+        // };
+        // if (std::find_if(netT->outputName.begin(), netT->outputName.end(), findOutputFunc) != netT->outputName.end()) {
         if (std::find(netT->outputName.begin(), netT->outputName.end(), op->name) != netT->outputName.end()) {
             outputOps.push_back(op.get());
         }
@@ -59,14 +75,6 @@ int main(int argc, char* argv[]) {
                     nextOps[op.get()].push_back(nextOp.get());
                 }
             }
-        }
-    }
-
-    // print nextOps
-    for (auto& op : nextOps) {
-        MNN_PRINT("op: %s => ", op.first->name.c_str());
-        for (auto& nextOp : op.second) {
-            MNN_PRINT("nextOp: %s\n", nextOp->name.c_str());
         }
     }
 
@@ -135,7 +143,17 @@ int main(int argc, char* argv[]) {
 
     MNN::ScheduleConfig gpuConfig;
     gpuConfig.type = MNN_FORWARD_OPENCL;
+    MNN::BackendConfig backendConfig;
+    backendConfig.memory = MNN::BackendConfig::Memory_Low;
+    gpuConfig.backendConfig = &backendConfig;
     int gpuBranchIndex = 1;
+    if (branchNodes.size() < 2) {
+        gpuBranchIndex = 0;
+    }
+
+    // auto* gpuSession = gpuNet->createSession(gpuConfig);
+    // auto gpuInputTensor = gpuNet->getSessionInput(gpuSession, nullptr);
+    // auto gpuOutputTensor = gpuNet->getSessionOutput(gpuSession, nullptr);
     auto* gpuSession = net->createSession(gpuConfig);
     auto gpuInputTensor = net->getSessionInput(gpuSession, nullptr);
     auto gpuOutputTensor = net->getSessionOutput(gpuSession, nullptr);
@@ -145,52 +163,186 @@ int main(int argc, char* argv[]) {
         return op->name == info->name();
     };
 
+    std::map<MNN::Tensor*, std::pair<bool, std::string>> isCPUBranchTensor;
+    std::map<MNN::Tensor*, std::pair<bool, std::string>> isGPUBranchTensor;
+    {
+        MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
+            for (auto& t : tensors) {
+                if (std::find_if(branchNodes[branchIndex].begin(), branchNodes[branchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[branchIndex].end()) {
+                    return true;
+                }
+            }
+            for (auto& t : tensors) {
+                isCPUBranchTensor[t] = std::make_pair(true, info->name());
+            }
+            return true;
+        };
+
+        MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
+            for (auto& t : tensors) {
+                if (std::find_if(branchNodes[branchIndex].begin(), branchNodes[branchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[branchIndex].end()) {
+                    return true;
+                }
+            }
+            for (auto& t : tensors) {
+                isCPUBranchTensor[t] = std::make_pair(true, info->name());
+            }
+            return true;
+        };
+
+        MNN::TensorCallBackWithInfo gpuBefore = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
+            for (auto& t : tensors) {
+                if (std::find_if(branchNodes[gpuBranchIndex].begin(), branchNodes[gpuBranchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[gpuBranchIndex].end()) {
+                    return true;
+                }
+            }
+            for (auto& t : tensors) {
+                isGPUBranchTensor[t] = std::make_pair(true, info->name());
+            }
+            return true;
+        };
+
+        MNN::TensorCallBackWithInfo gpuAfter = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
+            for (auto& t : tensors) {
+                if (std::find_if(branchNodes[gpuBranchIndex].begin(), branchNodes[gpuBranchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[gpuBranchIndex].end()) {
+                    return true;
+                }
+            }
+            for (auto& t : tensors) {
+                isGPUBranchTensor[t] = std::make_pair(true, info->name());
+            }
+            return true;
+        };
+
+        net->runSessionWithCallBackInfo(session, before, after);
+        // gpuNet->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter);
+        net->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter);
+        MNN_PRINT("CPU-GPU map created\n");
+
+        // print cpu branch tensor
+        MNN_PRINT("CPU branch tensor: \n");
+        for (auto& t : isCPUBranchTensor) {
+            if (t.second.first == true) {
+                MNN_PRINT("%s ", t.second.second.c_str());
+            }
+        }
+        MNN_PRINT("\n");
+
+        // print gpu branch tensor
+        MNN_PRINT("GPU branch tensor: \n");
+        for (auto& t : isGPUBranchTensor) {
+            if (t.second.first == true) {
+                MNN_PRINT("%s ", t.second.second.c_str());
+            }
+        }
+        MNN_PRINT("\n");
+    }
+
     MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
         for (auto& t : tensors) {
-            if (std::find_if(branchNodes[branchIndex].begin(), branchNodes[branchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[branchIndex].end()) {
+            if (isCPUBranchTensor[t].first == false) {
                 return false;
             }
         }
         return true;
     };
     MNN::TensorCallBackWithInfo after = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
-        // for (auto& t : tensors) {
-        //     if (std::find_if(branchNodes[branchIndex].begin(), branchNodes[branchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[branchIndex].end()) {
-        //         return false;
-        //     }
-        // }
         return true;
     };
 
     MNN::TensorCallBackWithInfo gpuBefore = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
         for (auto& t : tensors) {
-            if (std::find_if(branchNodes[gpuBranchIndex].begin(), branchNodes[gpuBranchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[gpuBranchIndex].end()) {
+            if (isGPUBranchTensor[t].first == false) {
                 return false;
             }
         }
         return true;
     };
     MNN::TensorCallBackWithInfo gpuAfter = [&](const std::vector<MNN::Tensor*>& tensors, const MNN::OperatorInfo* info) {
-        // for (auto& t : tensors) {
-        //     if (std::find_if(branchNodes[gpuBranchIndex].begin(), branchNodes[gpuBranchIndex].end(), [&info] (MNN::OpT* op) {return op->name == info->name();}) == branchNodes[gpuBranchIndex].end()) {
-        //         return false;
-        //     }
-        // }
         return true;
     };
 
+    auto summarizeTime = [] (const std::vector<uint64_t>& times) {
+        MNN_PRINT("time: ");
+        for (auto& t : times) {
+            MNN_PRINT("%f ", (float) t / 1000.0f);
+        }
+        auto avgTime = std::accumulate(times.begin(), times.end(), 0) / times.size();
+        auto minTime = *std::min_element(times.begin(), times.end());
+        MNN_PRINT("\nAvg time: %f ms, Min time: %f ms\n", (float) avgTime / 1000.0f, (float) minTime / 1000.0f);
+    };
 
+    net->resizeSession(session);
+    // gpuNet->resizeSession(gpuSession);
+    net->resizeSession(gpuSession);
+
+    std::vector<uint64_t> times;
+
+    // MNN_PRINT("CPU single\n");
+    // for (int i = 0; i < rounds; i++) {
+    //     auto start = getTimeInUs();
+    //     net->runSessionWithCallBackInfo(session, before, after);
+    //     auto end = getTimeInUs();
+    //     times.push_back(end - start);
+    // }
+    // summarizeTime(times);
+
+    MNN_PRINT("GPU single\n");
+    times.clear();
     for (int i = 0; i < rounds; i++) {
-        MNN::AutoTime timer(__LINE__, __func__);
-        net->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter);
-        net->runSessionWithCallBackInfo(session, before, after);
+        auto start = getTimeInUs();
+        // gpuNet->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter, false);
+        net->runSessionWithCallBackInfo(gpuSession, gpuBefore, gpuAfter, false);
         gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+        auto end = getTimeInUs();
+        times.push_back(end - start);
     }
+    summarizeTime(times);
 
+    MNN_PRINT("CPU-GPU Parallel\n");
+    times.clear();
     for (int i = 0; i < rounds; i++) {
-        MNN::AutoTime timer(__LINE__, __func__);
-        net->runSession(session);
+        auto start = getTimeInUs();
+        {
+            MNN::AutoTime _t(__LINE__, "GPU sche");
+            // gpuNet->runSessionWithCallBackInfoAsync(gpuSession, gpuBefore, gpuAfter, false);
+            net->runSessionWithCallBackInfoAsync(gpuSession, gpuBefore, gpuAfter, false);
+        }
+        {
+            MNN::AutoTime _t(__LINE__, "CPU comp");
+            net->runSessionWithCallBackInfo(session, before, after);
+        }
+        {
+            MNN::AutoTime _t(__LINE__, "GPU wait");
+            gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+        }
+        auto end = getTimeInUs();
+        times.push_back(end - start);
+        MNN_PRINT("=====================================\n");
     }
+    summarizeTime(times);
+
+    // MNN_PRINT("CPU single full\n");
+    // times.clear();
+    // for (int i = 0; i < rounds; i++) {
+    //     auto start = getTimeInUs();
+    //     net->runSession(session);
+    //     auto end = getTimeInUs();
+    //     times.push_back(end - start);
+    // }
+    // summarizeTime(times);
+
+    MNN_PRINT("GPU single full\n");
+    times.clear();
+    for (int i = 0; i < rounds; i++) {
+        auto start = getTimeInUs();
+        // gpuNet->runSession(gpuSession);
+        net->runSession(gpuSession);
+        gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+        auto end = getTimeInUs();
+        times.push_back(end - start);
+    }
+    summarizeTime(times);
 
     return 0;
 }

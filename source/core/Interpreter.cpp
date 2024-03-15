@@ -520,6 +520,24 @@ ErrorCode Interpreter::runSessionWithCallBackInfo(const Session* session, const 
     return errorcode;
 }
 
+ErrorCode Interpreter::runSessionWithCallBackInfoAsync(const Session* session, const TensorCallBackWithInfo& before,
+                                                       const TensorCallBackWithInfo& after, bool sync) const {
+#ifdef MNN_INTERNAL_ENABLED
+    Timer timer;
+#endif
+    ErrorCode errorcode = session->runWithCallBack(before, after, sync);
+
+#ifdef MNN_INTERNAL_ENABLED
+    if (shouldLog(FREQ_LOW)) {
+        waitSessionFinish(session);
+        float costTime = (float)timer.durationInUs() / (float)1000;
+        logForRunSession(session, costTime, "Interpreter::runSessionWithCallBackInfo");
+    }
+#endif // MNN_INTERNAL_ENABLED
+
+    return errorcode;
+}
+
 const Backend* Interpreter::getBackend(const Session* session, const Tensor* tensor) const {
     return session->getBackEnd(tensor);
 }
