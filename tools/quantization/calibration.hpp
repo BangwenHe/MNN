@@ -60,6 +60,10 @@ private:
     MNN::CV::ImageProcess::Config _imageProcessConfig;
     std::vector<std::string> _calibrationFiles;
     float mSimThreshold = 0.9f;
+    bool mDumpTensor = false;
+    bool mDumpAll = false;
+    std::string mDumpTensorName;
+    bool _runHybridQuant = false;
 
     // Tensor and Info
     std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfo;

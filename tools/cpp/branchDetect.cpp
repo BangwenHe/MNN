@@ -86,6 +86,10 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        if (op->type == MNN::OpType_Const) {
+            continue;
+        }
+
         auto inputIndexes = op->inputIndexes;
         auto outputIndexes = op->outputIndexes;
         auto opname = op->name;
@@ -276,6 +280,12 @@ int main(int argc, char* argv[]) {
     }
     summarizeTime(times);
 
+    std::vector<float> cpuOutputData(outputTensor->elementSize());
+    {
+        float* ptr = outputTensor->host<float>();
+        cpuOutputData.assign(ptr, ptr + outputTensor->elementSize());
+    }
+
     MNN_PRINT("GPU single\n");
     gpuOutputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
     times.clear();
@@ -304,6 +314,11 @@ int main(int argc, char* argv[]) {
 
         net->runSessionWithCallBackInfo(session, before, after);
         future.wait();
+
+        float* ptr = static_cast<float*>(gpuOutputTensor->map(MNN::Tensor::MAP_TENSOR_WRITE, gpuOutputTensor->getDimensionType()));
+        float* cpuData = outputTensor->host<float>();
+        std::transform(ptr, ptr + gpuOutputTensor->elementSize(), cpuData, cpuData, std::plus<float>());
+        gpuOutputTensor->unmap(MNN::Tensor::MAP_TENSOR_WRITE, gpuInputTensor->getDimensionType(), ptr);
 
         auto end = getTimeInUs();
         times.push_back(end - start);

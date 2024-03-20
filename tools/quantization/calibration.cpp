@@ -675,6 +675,25 @@ Calibration::Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* 
                 _inputType = Helper::InputType::SEQUENCE;
             }
         }
+
+        if (picObj.HasMember("dumpTensor")) {
+            mDumpTensor = picObj["dumpTensor"].GetBool();
+        }
+        if (picObj.HasMember("dumpTensorName")) {
+            mDumpTensorName = picObj["dumpTensorName"].GetString();
+        }
+        DLOG(INFO) << "dumpTensor: " << mDumpTensor;
+        DLOG(INFO) << "dumpTensorName: " << mDumpTensorName;
+
+        if (picObj.HasMember("dumpAll")) {
+            mDumpAll = picObj["dumpAll"].GetBool();
+        }
+        DLOG(INFO) << "dumpAll: " << mDumpAll;
+
+        if (picObj.HasMember("runHybridQuant")) {
+            _runHybridQuant = picObj["runHybridQuant"].GetBool();
+        }
+        DLOG(INFO) << "runHybridQuant: " << _runHybridQuant;
     }
     std::shared_ptr<ImageProcess> process(ImageProcess::create(_imageProcessConfig), ImageProcess::destroy);
     _process = process;
@@ -1640,8 +1659,9 @@ void Calibration::_computeInvertQuantError() {
         std::ofstream opOrderFile("op_order.txt");
         opOrderFile << opOrder;
     }
-    std::string swinTestOpName = "/features/features.1/features.1.0/attn/Add_2_output_0__matmul_converted";
-    bool dump = false;
+    std::string swinTestOpName = mDumpTensorName;
+    bool dump = mDumpTensor;
+    bool dumpAll = mDumpAll;
 
     for (const auto& file : _calibrationFiles) {
         count++;
@@ -1666,12 +1686,12 @@ void Calibration::_computeInvertQuantError() {
                         auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
                         fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
                         overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1684,12 +1704,12 @@ void Calibration::_computeInvertQuantError() {
                         auto dequantFeatureAndOverflowRatio = _featureInfo[t]->fakeQuantFeature();
                         fakeQuantedFeatures[_featureInfo[t]->name()] = dequantFeatureAndOverflowRatio.first;
                         overflowRatiosMap[_featureInfo[t]->name()].emplace_back(dequantFeatureAndOverflowRatio.second);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfo[t]->name() + " int8 " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1711,12 +1731,12 @@ void Calibration::_computeInvertQuantError() {
                         auto *ptr = t->host<float>();
                         fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
                         _featureInfoHalf[t]->setVisited(true);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1729,12 +1749,12 @@ void Calibration::_computeInvertQuantError() {
                         auto *ptr = t->host<float>();
                         fakeHalfFeatures[_featureInfoHalf[t]->name()].assign(ptr, ptr + t->elementSize());
                         _featureInfoHalf[t]->setVisited(true);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfoHalf[t]->name() + " half " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1762,12 +1782,12 @@ void Calibration::_computeInvertQuantError() {
                         auto halfFeature = fakeHalfFeatures[name];
                         float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
                         tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1785,12 +1805,12 @@ void Calibration::_computeInvertQuantError() {
                         auto halfFeature = fakeHalfFeatures[name];
                         float cosDisHalf = _featureInfoOrigin[t]->computeDistance(halfFeature);
                         tensorCosDistanceMapHalf[name].emplace_back(cosDisHalf);
-                    }
-                }
 
-                if (swinTestOpName == info->name() && dump) {
-                    std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
-                    dumpTensor2File(t, filename.c_str());
+                        if (dumpAll || (swinTestOpName == info->name() && dump)) {
+                            std::string filename = _featureInfoOrigin[t]->name() + " float " + std::to_string(count);
+                            dumpTensor2File(t, filename.c_str());
+                        }
+                    }
                 }
             }
             return true;
@@ -1826,7 +1846,7 @@ void Calibration::_computeInvertQuantError() {
                     nameToOpName[name].c_str(), name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
     }
 
-    hybridQuantModel();
+    // hybridQuantModel();
 }
 
 void Calibration::runQuantizeModel() {
@@ -1840,12 +1860,12 @@ void Calibration::runQuantizeModel() {
     } else if (_featureQuantizeMethod == "ADMM") {
         _computeFeatureScaleADMM();
     }
-    // if (_debug) {
-    //     _computeQuantError();
-    // }
+    if (_debug) {
+        _computeQuantError();
+    }
     _insertScale();
 
-    if (_debug) {
+    if (_runHybridQuant) {
         _fake_invert_quant_weights();
         _computeInvertQuantError();
     }
