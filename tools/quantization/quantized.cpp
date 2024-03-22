@@ -46,13 +46,18 @@ int main(int argc, const char* argv[]) {
     std::unique_ptr<uint8_t> modelOriginal(new uint8_t[size]);
     memcpy(modelOriginal.get(), ocontent, size);
 
+    std::unique_ptr<uint8_t> modelHalfBuffer(new uint8_t[size]);
+    memcpy(modelHalfBuffer.get(), ocontent, size);
+
     netT.reset();
     netT = MNN::UnPackNet(modelOriginal.get());
+
+    std::unique_ptr<MNN::NetT> netTHalf = MNN::UnPackNet(modelHalfBuffer.get());
 
     // quantize model's weight
     DLOG(INFO) << "Calibrate the feature and quantize model...";
     std::shared_ptr<Calibration> calibration(
-        new Calibration(netT.get(), modelForInference.get(), size, preTreatConfig, std::string(modelFile), std::string(dstFile)));
+        new Calibration(netT.get(), netTHalf.get(), modelForInference.get(), size, preTreatConfig, std::string(modelFile), std::string(dstFile)));
     calibration->runQuantizeModel();
     calibration->dumpTensorScales(dstFile);
     DLOG(INFO) << "Quantize model done!";
