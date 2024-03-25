@@ -328,10 +328,13 @@ static int test_main(int argc, const char* argv[]) {
     std::ofstream orderFileOs;
     orderFileOs.open(".order");
     if (saveOutput) {
-        MNN::TensorCallBack beforeCallBack = [&](const std::vector<MNN::Tensor*>& ntensors, const std::string& opName) {
+        std::ofstream orderOPFileOs;
+        orderOPFileOs.open(".orderOP");
+        MNN::TensorCallBackWithInfo beforeCallBack = [&](const std::vector<MNN::Tensor*>& ntensors, const OperatorInfo* info) {
             if (!saveInput) {
                 return true;
             }
+            auto& opName = info->name();
             for (int i = 0; i < ntensors.size(); ++i) {
                 auto ntensor      = ntensors[i];
                 if (nullptr == ntensor->host<void>() && 0 == ntensor->deviceId()) {
@@ -357,7 +360,9 @@ static int test_main(int argc, const char* argv[]) {
             }
             return true;
         };
-        MNN::TensorCallBack callBack = [&](const std::vector<MNN::Tensor*>& ntensors, const std::string& opName) {
+        MNN::TensorCallBackWithInfo callBack = [&](const std::vector<MNN::Tensor*>& ntensors, const OperatorInfo* info) {
+            auto& opName = info->name();
+            orderOPFileOs << opName << " " << info->type() << std::endl;
             for (int i = 0; i < ntensors.size(); ++i) {
                 auto ntensor    = ntensors[i];
                 auto outDimType = ntensor->getDimensionType();
@@ -391,7 +396,7 @@ static int test_main(int argc, const char* argv[]) {
             }
             return true;
         };
-        net->runSessionWithCallBack(session, beforeCallBack, callBack);
+        net->runSessionWithCallBackInfo(session, beforeCallBack, callBack);
     } else {
         net->runSession(session);
     }

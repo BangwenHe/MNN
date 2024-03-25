@@ -876,17 +876,15 @@ void Calibration::_insertScale() {
         if (opType != MNN::OpType_Convolution && opType != MNN::OpType_ConvolutionDepthwise) {
             continue;
         }
-        auto tensorsPair = _opInfo.find(op->name);
-        if (tensorsPair == _opInfo.end()) {
-            MNN_ERROR("Can't find tensors for %s\n", op->name.c_str());
-        }
+        auto* inputTensor = _tensorMap[op->inputIndexes[0]];
+        auto* outputTensor = _tensorMap[op->outputIndexes[0]];
         // below is Conv/DepthwiseConv weight quant
-        const float inputScale  = _scales[tensorsPair->second.first[0]];
-        const float outputScale = _scales[tensorsPair->second.second[0]];
-        const int inputChannel = tensorsPair->second.first[0]->channel();
-        const int outputChannel = tensorsPair->second.second[0]->channel();
+        const float inputScale  = _scales[inputTensor];
+        const float outputScale = _scales[outputTensor];
+        const int inputChannel = inputTensor->channel();
+        const int outputChannel = outputTensor->channel();
         auto param                = op->main.AsConvolution2D();
-        param->common->inputCount = tensorsPair->second.first[0]->channel();
+        param->common->inputCount = inputTensor->channel();
         const int channles        = param->common->outputCount;
         param->symmetricQuan.reset(new MNN::QuantizedFloatParamT);
         param->symmetricQuan->nbits = _quant_bits;
@@ -1185,14 +1183,12 @@ void Calibration::_computeInvertQuantError() {
     _interpreterHalf->resizeTensor(_inputTensorHalf, _inputTensorDims);
     _interpreterHalf->resizeSession(_sessionHalf);
 
-    std::ostringstream opOrderStream;
     std::map<std::string, std::string> nameToOpName;
     // init _featureInfoHalf
     MNN::TensorCallBackWithInfo before = [&](const std::vector<MNN::Tensor*>& nTensors, const MNN::OperatorInfo* info) {
         auto opName = info->name();
         auto type = info->type();
         // auto iter = std::find(_skip_quant_ops.begin(), _skip_quant_ops.end(), opName);
-        opOrderStream << opName << "\n";
 
         // if (iter != _skip_quant_ops.end()) {
         //     return false;
@@ -1239,13 +1235,8 @@ void Calibration::_computeInvertQuantError() {
     std::map<std::string, std::vector<float>> tensorCosDistanceMap;
     std::map<std::string, std::vector<float>> tensorCosDistanceMapHalf;
 
-    {
-        auto opOrder = opOrderStream.str();
-        std::ofstream opOrderFile("op_order.txt");
-        opOrderFile << opOrder;
-    }
-    std::string swinTestOpName = "/features/features.1/features.1.0/attn/Add_2_output_0__matmul_converted";
-    bool dump = false;
+    std::string swinTestOpName = mDumpTensorName;
+    bool dump = mDumpTensor;
 
     for (const auto& file : _calibrationFiles) {
         count++;
@@ -1451,6 +1442,7 @@ void Calibration::runQuantizeModel() {
 
     if (_runHybridQuant) {
         _fake_invert_quant_weights();
+        _computeInvertQuantError();
     }
 
     {
