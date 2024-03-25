@@ -51,6 +51,9 @@ list(APPEND MNN_CPP_TOOLS fuseTest)
 add_executable(branchDetect ${CMAKE_CURRENT_LIST_DIR}/branchDetect.cpp)
 list(APPEND MNN_CPP_TOOLS branchDetect)
 
+add_executable(testQuantOpLatency ${CMAKE_CURRENT_LIST_DIR}/testQuantOpLatency.cpp)
+list(APPEND MNN_CPP_TOOLS testQuantOpLatency)
+
 foreach(TARGET ${MNN_CPP_TOOLS})
     target_link_libraries(${TARGET} ${MNN_DEPS})
     if (MSVC)
