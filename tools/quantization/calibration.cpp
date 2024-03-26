@@ -21,6 +21,9 @@
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/prettywriter.h"
+#include "rapidjson/filewritestream.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/ostreamwrapper.h"
 //#define MNN_OPEN_TIME_TRACE
 #include <MNN/AutoTime.hpp>
 #include "Helper.hpp"
@@ -113,7 +116,7 @@ static void dumpTensor2File(const Tensor* tensor, const std::string& name) {
 
 
 Calibration::Calibration(MNN::NetT* model, MNN::NetT* halfModel, const uint8_t* modelBuffer, const int bufferSize, const std::string& configPath, std::string originalModelFile, std::string destModelFile)
-    : _originalModel(model), _halfModel(halfModel), _originalModelFile(originalModelFile), _destModelFile(destModelFile) {
+    : _originalModel(model), _halfModel(halfModel), _originalModelFile(originalModelFile), _destModelFile(destModelFile), _configPath(configPath) {
     // when the format of input image is RGB/BGR, channels equal to 3, GRAY is 1
     _channels = 3;
 
@@ -1445,8 +1448,6 @@ void Calibration::_computeInvertQuantError() {
         MNN_PRINT("int8 %s %s:  cos similarity: %f, overflow ratio: %f; int8->half: cos similarity: %f\n", 
                     nameToOpName[name].c_str(), name.c_str(), avgCosDistance, avgOverflowRatio, avgCosDistanceHalf);
     }
-
-    // hybridQuantModel();
 }
 
 void Calibration::runQuantizeModel() {
@@ -1468,6 +1469,7 @@ void Calibration::runQuantizeModel() {
     if (_runHybridQuant) {
         _fake_invert_quant_weights();
         _computeInvertQuantError();
+        hybridQuantModel();
     }
 
     ComputeUnaryBuffer(_originalModel);
@@ -1590,9 +1592,32 @@ void Calibration::hybridQuantModel() {
     }
     _interpreter->runSessionWithCallBackInfo(_session, before, after);
 
+    rapidjson::Document doc;
+    {
+        std::ifstream ifs(_configPath);
+        std::ostringstream oss;
+        oss << ifs.rdbuf();
+        doc.Parse(oss.str().c_str());
+    }
+
+    // create rapidjson array
+    rapidjson::Value saveSkipOps(rapidjson::kArrayType);
+
     MNN_PRINT("\n\nSKIP OPs\n");
     for (auto& op : skipOps) {
         MNN_PRINT("%s\n", op.c_str());
+        saveSkipOps.PushBack(rapidjson::StringRef(op.c_str()), doc.GetAllocator());
+    }
+
+    // add to config
+    doc.AddMember("skip_quant_op_names", saveSkipOps, doc.GetAllocator());
+    doc.GetObject()["runHybridQuant"].SetBool(false);
+    {
+        std::ofstream ofs(".hybrid_config");
+        auto& allocator = doc.GetAllocator();
+        rapidjson::OStreamWrapper osw(ofs);
+        rapidjson::Writer<rapidjson::OStreamWrapper> writer(osw);
+        doc.Accept(writer);
     }
 }
 

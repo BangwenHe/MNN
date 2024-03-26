@@ -64,6 +64,7 @@ private:
     bool mDumpAll = false;
     std::string mDumpTensorName;
     bool _runHybridQuant = false;
+    std::string _configPath;
 
     // Tensor and Info
     std::map<const MNN::Tensor*, std::shared_ptr<TensorStatistic>> _featureInfo;
