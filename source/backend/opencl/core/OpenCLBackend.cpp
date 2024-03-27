@@ -421,16 +421,28 @@ Backend::MemObj* OpenCLBackend::onAcquire(const Tensor* nativeTensor, StorageTyp
 
         if (storageType == DYNAMIC_SEPERATE) {
             auto image                               = mImagePool->alloc(imageWidth, imageHeight, dataType, true);
+            if (image == nullptr) {
+                auto size = mOpenCLRuntime->getMaxImage2DSize();
+                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+            }
             ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
             return new CLMemReleaseImage(image, mImagePool.get());
         }
         if (storageType == DYNAMIC) {
             auto image                               = mImagePool->alloc(imageWidth, imageHeight, dataType);
+            if (image == nullptr) {
+                auto size = mOpenCLRuntime->getMaxImage2DSize();
+                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+            }
             ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
             return new CLMemReleaseImage(image, mImagePool.get());
         }
         MNN_ASSERT(storageType == STATIC);
         auto image                               = mStaticImagePool->alloc(imageWidth, imageHeight, dataType);
+        if (image == nullptr) {
+            auto size = mOpenCLRuntime->getMaxImage2DSize();
+            MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+        }
         ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
         return new CLMemReleaseImage(image, mStaticImagePool.get());
     }

@@ -18,6 +18,9 @@
 #include <MNN/AutoTime.hpp>
 #include "CLCache_generated.h"
 using namespace CLCache;
+
+#define MEM_TYPE_ENV_VARIABLE "MNN_OPENCL_MEMORY"
+
 namespace MNN {
 
 extern const std::map<std::string, std::vector<unsigned char>> OpenCLProgramMap;
@@ -216,6 +219,17 @@ OpenCLRuntime::OpenCLRuntime(const BackendConfig::PrecisionMode precision, const
                     mMemType = BUFFER;
                 } else {
                     mMemType = IMAGE;
+                }
+
+                auto* env_p = std::getenv(MEM_TYPE_ENV_VARIABLE);
+                if (env_p != nullptr) {
+                    std::string env_mem_type(env_p);
+                    if (env_mem_type == "BUFFER") {
+                        mMemType = BUFFER;
+                    } else if (env_mem_type == "IMAGE") {
+                        mMemType = IMAGE;
+                    }
+                    MNN_PRINT("OpenCL memory type set by environment variable: %s\n", env_mem_type.c_str());
                 }
             }
 
