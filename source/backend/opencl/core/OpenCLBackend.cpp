@@ -423,7 +423,8 @@ Backend::MemObj* OpenCLBackend::onAcquire(const Tensor* nativeTensor, StorageTyp
             auto image                               = mImagePool->alloc(imageWidth, imageHeight, dataType, true);
             if (image == nullptr) {
                 auto size = mOpenCLRuntime->getMaxImage2DSize();
-                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu], tensor size: [%d, %d, %d, %d]\n", 
+                        imageWidth, imageHeight, size[0], size[1], N, H, W, C);
             }
             ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
             return new CLMemReleaseImage(image, mImagePool.get());
@@ -432,7 +433,8 @@ Backend::MemObj* OpenCLBackend::onAcquire(const Tensor* nativeTensor, StorageTyp
             auto image                               = mImagePool->alloc(imageWidth, imageHeight, dataType);
             if (image == nullptr) {
                 auto size = mOpenCLRuntime->getMaxImage2DSize();
-                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+                MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu], tensor size: [%d, %d, %d, %d]\n", 
+                        imageWidth, imageHeight, size[0], size[1], N, H, W, C);
             }
             ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
             return new CLMemReleaseImage(image, mImagePool.get());
@@ -441,7 +443,8 @@ Backend::MemObj* OpenCLBackend::onAcquire(const Tensor* nativeTensor, StorageTyp
         auto image                               = mStaticImagePool->alloc(imageWidth, imageHeight, dataType);
         if (image == nullptr) {
             auto size = mOpenCLRuntime->getMaxImage2DSize();
-            MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu]\n", imageWidth, imageHeight, size[0], size[1]);
+            MNN_PRINT("image size [%lu, %lu] is not supported, max size: [%lu, %lu], tensor size: [%d, %d, %d, %d]\n", 
+                    imageWidth, imageHeight, size[0], size[1], N, H, W, C);
         }
         ((Tensor*)nativeTensor)->buffer().device = (uint64_t)image; // fix
         return new CLMemReleaseImage(image, mStaticImagePool.get());
