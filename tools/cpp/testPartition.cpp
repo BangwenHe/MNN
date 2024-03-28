@@ -253,7 +253,13 @@ static int test_main(int argc, const char* argv[]) {
     MNN_PRINT("===========> Session Resize Done.\n");
     MNN_PRINT("===========> Session Start partition...\n");
 
-    net->partitionSession(session, savePath, runTime);
+    {
+        auto start = getTimeInUs();
+        net->partitionSession(session, savePath, runTime);
+        auto end = getTimeInUs();
+        float searchTime = (end - start) / 1000.0f;
+        MNN_PRINT("Partition Time: %f ms\n", searchTime);
+    }
     MNN_PRINT("===========> Session Partition Done. Save result to %s\n", savePath.c_str());
 
     return 0;

@@ -227,28 +227,29 @@ void CoDLBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTensor)
   // 将三份buffer全部拷贝
   mCPUBackend->onCopyBuffer(srcTensor, dstTensor);
 
-  // deviceId 是 halide_buffer_t::device, 表示设备上的内存 handle
-  // 如果 deviceId 为 0 或者 1, 说明内存在 CPU 上
-  auto isSrcInDev = srcTensor->deviceId() != 0 && srcTensor->deviceId() != 1;
-  auto isDstInDev = dstTensor->deviceId() != 0 && dstTensor->deviceId() != 1;
-  // 至少有一个 tensor 不在 CPU 上, 或者两个都不在 CPU 上
-  if (isSrcInDev && isDstInDev) {
-    CoDLCPUGPUMemPack *srcObj = (CoDLCPUGPUMemPack *) (srcTensor->buffer().device);
-    CoDLCPUGPUMemPack *dstObj = (CoDLCPUGPUMemPack *) (dstTensor->buffer().device);
+  // TODO: 拷贝有 bug 跳过
+  // // deviceId 是 halide_buffer_t::device, 表示设备上的内存 handle
+  // // 如果 deviceId 为 0 或者 1, 说明内存在 CPU 上
+  // auto isSrcInDev = srcTensor->deviceId() != 0 && srcTensor->deviceId() != 1;
+  // auto isDstInDev = dstTensor->deviceId() != 0 && dstTensor->deviceId() != 1;
+  // // 至少有一个 tensor 不在 CPU 上, 或者两个都不在 CPU 上
+  // if (isSrcInDev && isDstInDev) {
+  //   CoDLCPUGPUMemPack *srcObj = (CoDLCPUGPUMemPack *) (srcTensor->buffer().device);
+  //   CoDLCPUGPUMemPack *dstObj = (CoDLCPUGPUMemPack *) (dstTensor->buffer().device);
 
-    mCPUBackend->onCopyBuffer(srcObj->getCPUTensor(), dstObj->getCPUTensor());
-    mOpenCLBackend->onCopyBuffer(srcObj->getOCLTensor(), dstObj->getOCLTensor());
-  } else if (isSrcInDev) {
-    // TODO: 这里假设 src 上的 host 内存跟 memobj 内存是同步的
-    // 如果 src 在设备上, 跳过, 因为已经在 CPU 上拷贝过了
-  } else if (isDstInDev) {
-    // 如果 dst 在设备上, 拷贝两次
-    CoDLCPUGPUMemPack *dstObj = (CoDLCPUGPUMemPack *) (dstTensor->buffer().device);
-    mCPUBackend->onCopyBuffer(srcTensor, dstObj->getCPUTensor());
-    mOpenCLBackend->onCopyBuffer(srcTensor, dstObj->getOCLTensor());
-  } else {
-    MNN_PRINT("onCopyBuffer: both src and dst are on CPU\n");
-  }
+  //   mCPUBackend->onCopyBuffer(srcObj->getCPUTensor(), dstObj->getCPUTensor());
+  //   mOpenCLBackend->onCopyBuffer(srcObj->getOCLTensor(), dstObj->getOCLTensor());
+  // } else if (isSrcInDev) {
+  //   // TODO: 这里假设 src 上的 host 内存跟 memobj 内存是同步的
+  //   // 如果 src 在设备上, 跳过, 因为已经在 CPU 上拷贝过了
+  // } else if (isDstInDev) {
+  //   // 如果 dst 在设备上, 拷贝两次
+  //   CoDLCPUGPUMemPack *dstObj = (CoDLCPUGPUMemPack *) (dstTensor->buffer().device);
+  //   mCPUBackend->onCopyBuffer(srcTensor, dstObj->getCPUTensor());
+  //   mOpenCLBackend->onCopyBuffer(srcTensor, dstObj->getOCLTensor());
+  // } else {
+  //   MNN_PRINT("onCopyBuffer: both src and dst are on CPU\n");
+  // }
 }
 
 static inline std::map<std::pair<OpType, GpuMemObject>, CoDLBackend::Creator *>* GetCreator() {
