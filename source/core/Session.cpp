@@ -243,6 +243,17 @@ ErrorCode Session::partition(const std::string& resultPath, int benchmarkTimes) 
     return NO_ERROR;
 }
 
+ErrorCode Session::partitionAll(const std::string& resultPath, int benchmarkTimes) {
+    for (auto& iter : mPipelines) {
+        auto error = iter->partitionAll(resultPath, benchmarkTimes);
+        if (NO_ERROR != error) {
+            return error;
+        }
+    }
+    return NO_ERROR;
+}
+
+
 bool Session::getInfo(Interpreter::SessionInfoCode code, void* ptr) const {
     switch (code) {
         case Interpreter::MEMORY: {

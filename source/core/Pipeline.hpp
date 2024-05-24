@@ -54,6 +54,8 @@ public:
 
     ErrorCode partition(const std::string& resultPath, int benchmarkTimes);
 
+    ErrorCode partitionAll(const std::string& resultPath, int benchmarkTimes);
+
     float flops() const {
         return mFlops;
     }

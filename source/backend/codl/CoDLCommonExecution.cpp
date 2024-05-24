@@ -40,10 +40,10 @@ ErrorCode CoDLCPUOnlyCommonExecution::onExecute(const std::vector<Tensor *> &inp
     return ret;
   }
 
-  for (auto *output : outputs) {
-    auto *mem = (CoDLCPUGPUMemPack *)(output->buffer().device);
-    mem->getOCLTensor()->copyFromHostTensor(mem->getCPUTensor());
-  }
+  // for (auto *output : outputs) {
+  //   auto *mem = (CoDLCPUGPUMemPack *)(output->buffer().device);
+  //   mem->getOCLTensor()->copyFromHostTensor(mem->getCPUTensor());
+  // }
 
   return NO_ERROR;
 }

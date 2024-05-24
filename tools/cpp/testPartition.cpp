@@ -259,8 +259,23 @@ static int test_main(int argc, const char* argv[]) {
         auto end = getTimeInUs();
         float searchTime = (end - start) / 1000.0f;
         MNN_PRINT("Partition Time: %f ms\n", searchTime);
+        MNN_PRINT("===========> Session Partition Done. Save result to %s\n", savePath.c_str());
     }
-    MNN_PRINT("===========> Session Partition Done. Save result to %s\n", savePath.c_str());
+
+
+// #ifndef __ANDROID__
+//     {
+//         std::string allPath = savePath + "_all.json";
+
+//         auto start = getTimeInUs();
+//         net->partitionSessionAll(session, allPath, runTime);
+//         auto end = getTimeInUs();
+//         float searchTime = (end - start) / 1000.0f;
+//         MNN_PRINT("PartitionAll Time: %f ms\n", searchTime);
+//         MNN_PRINT("===========> Session Partition Done. Save result to %s\n", allPath.c_str());
+//     }
+// #endif
+
 
     return 0;
 }

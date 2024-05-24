@@ -1192,8 +1192,8 @@ ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes)
 
             float bestRatio = optParam.mPartRatio;
             if (delta > 0) {
+                optParam.mPartRatio -= 0.1f;
                 while (delta > 0 && optParam.mPartRatio > 0.1f) {
-                    optParam.mPartRatio -= 0.1f;
                     codlBackend->setPartitionParam(n, m, k, optParam);
 
                     mBackend->onResizeBegin();
@@ -1220,10 +1220,11 @@ ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes)
 
                     MNN_PRINT("dim: %d, delta: %f, modLatCpu: %f, modLatGpu: %f, modLat: %f, dimMinLat: %f, ratio: %f\n", 
                                 dim, delta, modLatCpu, modLatGpu, modLat, dimMinLat, optParam.mPartRatio);
+                    optParam.mPartRatio -= 0.1f;
                 }
             } else {
+                optParam.mPartRatio += 0.1f;
                 while (delta < 0 && optParam.mPartRatio < 0.9f) {
-                    optParam.mPartRatio += 0.1f;
                     codlBackend->setPartitionParam(n, m, k, optParam);
 
                     mBackend->onResizeBegin();
@@ -1250,6 +1251,7 @@ ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes)
 
                     MNN_PRINT("dim: %d, delta: %f, modLatCpu: %f, modLatGpu: %f, modLat: %f, dimMinLat: %f, ratio: %f\n", 
                                 dim, delta, modLatCpu, modLatGpu, modLat, dimMinLat, optParam.mPartRatio);
+                    optParam.mPartRatio += 0.1f;
                 }
             }
 
@@ -1300,6 +1302,131 @@ ErrorCode Pipeline::partition(const std::string& resultPath, int benchmarkTimes)
     return NO_ERROR;
 #endif
 }
+
+
+ErrorCode Pipeline::partitionAll(const std::string& resultPath, int benchmarkTimes) {
+#if !defined(MNN_CODL_ENABLED)
+    return NO_ERROR;
+#else
+    auto& mBackend = mInfo.first.cache.first;
+    auto& mBackupBackend = mInfo.first.cache.second;
+
+    // std::tuple<int, int, int> -> n, m, k
+    // std::pair<Execution*, int, float> -> execution*, dim, ratio
+    std::map<std::tuple<int, int, int>, std::tuple<Command*, CoDLNodePartitionParam>> partition;
+
+    for (auto& info : mInfo.second) {
+        auto& buffer = info.executeBuffer;
+        for (auto& cmdP : buffer.command) {
+            auto& cmd = *cmdP;
+            auto t = cmd.op->type();
+            if (t == OpType_Convolution) {
+                auto conv = cmd.op->main_as_Convolution2D();
+                int n = cmd.workInputs[0]->batch();
+                int m = cmd.workInputs[0]->channel();
+                int k = cmd.workOutputs[0]->channel();
+
+                auto tuple = std::make_tuple(n, m, k);
+                // MNN_PRINT("matrix multiply: n = %d, m = %d, k = %d\n", n, m, k);
+                // ignore mm which batch size is bigger than 1
+                if (partition.find(tuple) == partition.end() && n > 1) {
+                    partition[tuple] = std::make_tuple(cmdP.get(), CoDLNodePartitionParam{CoDLNodePartitionParam::PART_DIM_N, 0.5f});
+                }
+            }
+        }
+    }
+
+    std::vector<CoDLNodePartitionParam::PartDim> dims{CoDLNodePartitionParam::PART_DIM_N, 
+        CoDLNodePartitionParam::PART_DIM_IC, CoDLNodePartitionParam::PART_DIM_OC};
+    std::vector<float> ratios{0.4f, 0.5f, 0.6f};
+
+    for (auto& p : partition) {
+        int n = std::get<0>(p.first);
+        int m = std::get<1>(p.first);
+        int k = std::get<2>(p.first);
+        auto& c = std::get<0>(p.second);
+        auto& param = std::get<1>(p.second);
+        float minLat = 1000.0f;
+
+        // MNN_PRINT("map matrix multiply: n = %d, m = %d, k = %d\n", n, m, k);
+        auto codlBackend = static_cast<CoDLBackend*>(mBackend.get());
+        auto& exe = c->execution;
+        CoDLNodePartitionParam bestParam = param;
+        for (auto& dim : dims) {
+
+            for (int j = 1; j < 10; j++) {
+                float ratio = j * 0.1f;
+                CoDLNodePartitionParam optParam{dim, ratio};
+                mBackend->onResizeBegin();
+                codlBackend->setPartitionParam(n, m, k, param);
+                exe->onResize(c->workInputs, c->workOutputs);
+                mBackend->onResizeEnd();
+
+                mBackend->onExecuteBegin();
+                float optCpu = 0.0f, optGpu = 0.0f;
+                for (int i = 0; i < benchmarkTimes; i++) {
+                    auto latencies = exe->onProfiling(c->workInputs, c->workOutputs);
+                    optCpu += latencies[0];
+                    optGpu += latencies[1];
+                }
+                optCpu /= benchmarkTimes;
+                optGpu /= benchmarkTimes;
+                float delta = optCpu - optGpu;
+                float dimMinLat = std::max(optCpu, optGpu);
+                mBackend->onExecuteEnd();
+                MNN_PRINT("<<< initial dim: %d, delta: %f, optCpu: %f, optGpu: %f, dimMinLat: %f, ratio: %f\n", 
+                            dim, delta, optCpu, optGpu, dimMinLat, optParam.mPartRatio);
+
+                if (dimMinLat < minLat) {
+                    minLat = dimMinLat;
+                    optParam.mPartRatio = ratio;
+                    bestParam = optParam;
+                }
+            }
+        }
+    
+        param = bestParam;
+        MNN_PRINT("<==== n=%d, m=%d, k=%d, dim=%d, ratio=%f, minLat=%f\n", n, m, k, param.mPartDim, param.mPartRatio, minLat);
+    }
+
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    std::ofstream ofs(resultPath);
+    
+    writer.StartArray();
+    // 数组中保存 n m k dim ratio 参数
+    for (auto& p : partition) {
+        int n = std::get<0>(p.first);
+        int m = std::get<1>(p.first);
+        int k = std::get<2>(p.first);
+        auto& param = std::get<1>(p.second);
+        rapidjson::Value obj(rapidjson::kObjectType);
+
+        writer.StartObject();
+        writer.Key("n");
+        writer.Int(n);
+        writer.Key("m");
+        writer.Int(m);
+        writer.Key("k");
+        writer.Int(k);
+        writer.Key("dim");
+        writer.Int(param.mPartDim);
+        writer.Key("ratio");
+        writer.Double(param.mPartRatio * 10.0f);
+        writer.Key("min_time");
+        writer.Double(0.0);
+        writer.Key("max_time");
+        writer.Double(0.0);
+        writer.EndObject();
+    }
+    writer.EndArray();
+    ofs << buffer.GetString();
+
+    return NO_ERROR;
+#endif
+}
+
+
 
 Pipeline::~Pipeline() {
     auto& bn = mInfo.first.cache.first;

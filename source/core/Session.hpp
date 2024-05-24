@@ -72,6 +72,7 @@ public:
      * @return result code.
     */
     ErrorCode partition(const std::string& resultPath, int benchmarkTimes);
+    ErrorCode partitionAll(const std::string& resultPath, int benchmarkTimes);
 
     /**
      * @brief set if needs resize.

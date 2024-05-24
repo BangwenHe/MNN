@@ -2,6 +2,7 @@
 #include "CoDLCPUGPUMemPack.hpp"
 #include "CoDLUtils.hpp"
 #include "MNN/AutoTime.hpp"
+#include "backend/opencl/core/runtime/OpenCLWrapper.hpp"
 
 namespace MNN {
 
@@ -155,6 +156,8 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
   MNN_PRINT("\n");
   AutoTime _t(__LINE__, __func__);
 #endif
+  bool finish = false;
+
   ErrorCode ret1 = NO_ERROR, ret2 = NO_ERROR;
   auto future2 = std::async(std::launch::async, [&]() {
 #ifdef MNN_CODL_DEBUG
@@ -163,6 +166,8 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
     ret2 = mOCLConvolution->onExecute(mOCLInputs, mOCLOutputs);
     // 因为 OpenCL 的执行是异步的, 所以这里需要等待 OpenCL 执行完毕
     mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+    mBackend->getOpenCLBackend()->clearRecord();
+    finish = true;
     return 0;
   });
 
@@ -176,7 +181,10 @@ ErrorCode CoDLConvolution::onExecute(const std::vector<Tensor *> &inputs,
   {
     AutoTime _t(__LINE__, __func__);
 #endif
-    future2.wait();
+    // future2.wait();
+    while (!finish) {
+      std::this_thread::yield();
+    }
 #ifdef MNN_CODL_DEBUG
   }
 #endif
@@ -203,6 +211,7 @@ CoDLConvolution::onProfiling(const std::vector<Tensor *> &inputs,
     Timer timer;
     mOCLConvolution->onExecute(mOCLInputs, mOCLOutputs);
     mBackend->getOpenCLBackend()->getOpenCLRuntime()->commandQueue().finish();
+    mBackend->getOpenCLBackend()->clearRecord();
     auto dur = timer.durationInUs();
     return dur / 1000.0f;
   });

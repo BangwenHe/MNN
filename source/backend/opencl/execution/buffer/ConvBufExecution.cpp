@@ -446,6 +446,14 @@ ErrorCode ConvBufExecution::onResize(const std::vector<Tensor *> &inputs, const 
     const int inputWidth    = inputShape.at(2);
     const int inputChannels = inputShape.at(3);
 
+    // auto filterShape = mFilter->shape();
+
+    // MNN_PRINT("input: %dx%dx%dx%d; output: %dx%dx%dx%d, kernel: %dx%d, filter: %dx%dx%dx%d, conv1x1: %d\n", 
+    //             inputShape[0], inputShape[1], inputShape[2], inputShape[3],
+    //             outputShape[0], outputShape[1], outputShape[2], outputShape[3],
+    //             mKernelHeight, mKernelWidth, 
+    //             filterShape[0], filterShape[1], filterShape[2], filterShape[3], mConv1x1Opt);
+
     const int inputChannelBlocks = UP_DIV(inputChannels, 4);
     auto padding = ConvolutionCommon::convolutionPad(input, output, mConv2dCommonParams);
     mPaddings[0] = padding.second;//padY

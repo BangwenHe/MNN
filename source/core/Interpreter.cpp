@@ -479,6 +479,11 @@ void Interpreter::partitionSession(Session *session, const std::string& resultPa
     session->partition(resultPath, benchmarkTimes);
 }
 
+void Interpreter::partitionSessionAll(Session *session, const std::string& resultPath, int benchmarkTimes) {
+    std::unique_lock<std::mutex> _l(mNet->lock);
+    session->partitionAll(resultPath, benchmarkTimes);
+}
+
 ErrorCode Interpreter::runSessionWithCallBack(const Session* session, const TensorCallBack& before,
                                               const TensorCallBack& after, bool sync) const {
     auto beforeWrap = [&before](const std::vector<Tensor*>& tensors, const OperatorInfo* info) {
